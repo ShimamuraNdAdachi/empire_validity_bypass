@@ -1,0 +1,51 @@
+# Nomadic Shroud-Forged - empire design validation bypass
+#
+# Redefines origin_shroud_forged with the vanilla "is_nomadic = no" requirement
+# removed from its "possible" block, so an empire design that is both nomadic
+# and Shroud-Forged passes validation.
+#
+# Everything else is copied from Stellaris 4.5.2
+# common/governments/civics/00_origins.txt.
+#
+# Civics/origins are LIOS (last-in, only-served): this entry replaces the
+# vanilla one, and the "zzz_" prefix makes this file load after 00_origins.txt.
+
+origin_shroud_forged = {
+	is_origin = yes
+	icon = "gfx/interface/icons/origins/origins_shroud_forged.dds"
+	picture = GFX_origin_shroud_forged
+
+	max_once_global = yes
+
+	playable = {
+		has_shroud_dlc = yes
+	}
+
+	possible = {
+		authority = { value = auth_machine_intelligence }
+		civics = {
+			NOR = {
+				value = civic_machine_servitor
+				value = civic_machine_terminator
+				value = civic_machine_assimilator
+				value = civic_machine_chosen
+			}
+		}
+		# Bypass: the vanilla "is_nomadic = no" requirement is intentionally
+		# omitted so a saved nomadic Shroud-Forged design passes validation.
+	}
+
+	description = "origin_tooltip_shroud_forged_effects"
+	flags = { custom_start_screen }
+
+	traits = {}
+
+	modifier = {
+		ROBOT_species_trait_picks_add = 1
+		ROBOT_species_trait_points_add = 1
+	}
+
+	random_weight = {
+		base = 0
+	}
+}

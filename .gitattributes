@@ -1,0 +1,36 @@
+# ============================================================
+# Stellaris mod: empire_validity_bypass
+# ------------------------------------------------------------
+# 游戏脚本文件一律 -text：git 不做换行 / 编码转换，
+# 避免无意义的整文件 diff，也让脚本内容与游戏目录逐字节一致。
+# ============================================================
+
+# --- Paradox 脚本与描述文件：字节透传 -----------------------
+*.txt      -text
+*.mod      -text
+*.csv      -text
+*.shader   -text
+*.gfx      -text
+*.gui      -text
+*.asset    -text
+*.lua      -text
+*.yml      -text
+*.yaml     -text
+
+# --- 二进制资源 --------------------------------------------
+*.dds      binary
+*.png      binary
+*.jpg      binary
+*.tga      binary
+*.dll      binary
+*.exe      binary
+*.zip      binary
+
+# --- 文档与工具：统一换行 ----------------------------------
+*.md       text eol=lf
+*.ps1      text eol=crlf
+*.psm1     text eol=crlf
+*.json     text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+.editorconfig  text eol=lf
