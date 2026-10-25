@@ -1,8 +1,8 @@
-version="1.2.1"
+version="1.2.2"
 tags={
 	"Gameplay"
 	"Utilities"
 }
 name="虚境铸造：游牧兼容"
 picture="thumbnail.png"
-supported_version="4.5.*"
+supported_version="v4.5.*"

@@ -170,6 +170,52 @@ if (-not $ModName) { Warn 'descriptor.mod 里没有 name 字段（工坊标题�
 if (-not $SupportedVersion) { Warn 'descriptor.mod 里没有 supported_version 字段' }
 if (-not $Picture) { Warn 'descriptor.mod 里没有 picture 字段（工坊会用默认缩略图）' }
 
+# ---------------------------------------------------------------- 版本字符串护栏
+# Stellaris 启动器把 descriptor 的 supported_version 原样存成 requiredVersion，再和
+# launcher-settings.json 的 rawVersion（4.5.2 是 "v4.5.2"，官方说明就是
+# "Game version used in validation of mods"）做整串正则比对：结尾 ".*" 换成
+# "(?:\..*|)"、其余字面转义、首尾锚定。写成 "4.5.*" 得到 ^4\.5(?:\..*|)$，匹配不上
+# "v4.5.2" —— 启动器判「该Mod仅在另一个游戏版本中可用」，游戏也就不认这个描述文件
+# （订阅了不生效、主菜单校验码保持原版）。缺 v 前缀直接构建失败，别让它再上线一次。
+if ($SupportedVersion -and $SupportedVersion -notmatch '^v\d+\.\d+\.\*$') {
+    Fail 2 ('supported_version 必须写成 v<主版本>.<次版本>.*（当前 "' + $SupportedVersion + '"）：' +
+            'Stellaris 启动器把它和 launcher-settings.json 的 rawVersion（如 v4.5.2）整串比对，' +
+            '缺 v 前缀会被判为不兼容，游戏不会加载该 mod')
+}
+
+# 与启动器 app.asar 里 satisfiesRange 等价的匹配：结尾 ".*" → "(?:\..*|)"，其余 "*" → ".*"
+function Test-ModVersionRangeMatch([string]$RawVersion, [string]$Range) {
+    if (-not $RawVersion -or -not $Range) { return $true }
+    $trailingStar = $Range -match '\.\*+$'
+    $body = $Range -replace '\.\*+$', ''
+    $pattern = (($body -split '\*+') | ForEach-Object { [regex]::Escape($_) }) -join '.*'
+    if ($trailingStar) { $pattern = $pattern + '(?:\..*|)' }
+    return [regex]::IsMatch($RawVersion, '^' + $pattern + '$')
+}
+
+# 本机装了游戏就再复验一次：descriptor 声明的范围必须能匹配 rawVersion
+$LocalGame = $null
+try {
+    . (Join-Path $PSScriptRoot 'common.ps1')
+    $LocalGame = Get-StellarisGamePath
+} catch {
+    $LocalGame = $null
+}
+if ($LocalGame) {
+    $settingsFile = Join-Path $LocalGame 'launcher-settings.json'
+    if (Test-Path -LiteralPath $settingsFile) {
+        $rawMatch = [regex]::Match((Read-TextFileUtf8 $settingsFile), '"rawVersion"\s*:\s*"([^"]+)"')
+        if ($rawMatch.Success) {
+            $RawVersion = $rawMatch.Groups[1].Value
+            if ($SupportedVersion -and -not (Test-ModVersionRangeMatch $RawVersion $SupportedVersion)) {
+                Fail 2 ('supported_version "' + $SupportedVersion + '" 匹配不上本机游戏的 rawVersion "' +
+                        $RawVersion + '"：启动器会把这个 mod 判为不兼容，改成 v<主版本>.<次版本>.* 再试')
+            }
+            Write-Host ('版本护栏  ：rawVersion=' + $RawVersion + '，supported_version=' + $SupportedVersion + '，匹配通过')
+        }
+    }
+}
+
 if (Select-String -LiteralPath $Desc -Pattern '^\s*path\s*=' -Quiet) {
     Fail 2 'descriptor.mod 含有 path= 字段：工坊上传的内容里不能有它（删掉再构建）'
 }

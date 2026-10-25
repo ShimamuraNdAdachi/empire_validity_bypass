@@ -1,5 +1,20 @@
 # 变更记录
 
+## 1.2.2
+
+- 修复「订阅后启动器显示不兼容、进游戏校验码仍是原版 9776、mod 不生效」：
+  `descriptor.mod` / 根部 `.mod` 的 `supported_version` 从 `4.5.*` 改为 **`v4.5.*`**。
+- 原因：启动器把 descriptor 的 `supported_version` 原样存成 `requiredVersion`，再与
+  `launcher-settings.json` 的 `rawVersion` 比对（该字段的官方说明就是
+  "Game version used in validation of mods"）。Stellaris 4.5.2 的 `rawVersion` 是 `v4.5.2`，
+  带 `v`；比对规则是「结尾 `.*` → `(?:\..*|)`，其余字面转义，首尾锚定，整串匹配」，于是
+  `4.5.*` → `^4\.5(?:\..*|)$` 匹配不上 `v4.5.2`（判不兼容、游戏不加载），
+  `v4.5.*` → `^v4\.5(?:\..*|)$` 正常匹配。
+- `tools/build.ps1` 增加版本护栏：`supported_version` 必须是 `v<主版本>.<次版本>.*`，
+  并读取本机 `launcher-settings.json` 的 `rawVersion` 按启动器同一套规则复验；
+  `tools/build.sh` 同步加上同样的格式校验。
+- README 补充「订阅后不生效 / 校验码不变」排错一节，并填上创意工坊 ID。
+
 ## 1.2.1
 
 - 修正创意工坊简介的标题：原先用的 size=5 不是 Steam 支持的 BBCode 标签（会被原样打印成文字），

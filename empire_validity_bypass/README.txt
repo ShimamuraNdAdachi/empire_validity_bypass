@@ -1,4 +1,4 @@
-虚境铸造：游牧兼容 (empire_validity_bypass) 1.2.1
+虚境铸造：游牧兼容 (empire_validity_bypass) 1.2.2
 =================================================
 
 只改一条规则：origin_shroud_forged 的 possible 里去掉 is_nomadic = no，

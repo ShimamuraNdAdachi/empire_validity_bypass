@@ -7,7 +7,7 @@
 - 依赖 DLC：**Shadows of the Shroud**
 - 本地化：**无新增文本**（只改判定逻辑，界面上不出现新词条）
 - 当前版本：见 [`empire_validity_bypass/descriptor.mod`](empire_validity_bypass/descriptor.mod)
-- 创意工坊：`https://steamcommunity.com/sharedfiles/filedetails/?id=<PublishedFileId>`（上传后把 ID 填在这里）
+- 创意工坊：[3827261380](https://steamcommunity.com/sharedfiles/filedetails/?id=3827261380)
 
 ## 安装
 
@@ -39,6 +39,44 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install.ps1 -Enable
 ```
 
 会备份旧副本、写出带绝对路径的 `.mod`，并把条目追加到 `dlc_load.json`。
+
+## 排错：订阅了但 mod 不生效（校验码还是原版）
+
+症状：启动器里勾上了，播放集里该 mod 挂着「不兼容」标（提示「该Mod仅在另一个游戏版本(x)中可用」），
+进游戏主菜单校验码仍是原版 —— Stellaris 4.5.2 的原版校验码是 `9776`。
+
+根因是 `supported_version` 少写了一个 `v`：
+
+- 启动器把 descriptor 的 `supported_version` 原样存成 `requiredVersion`，再和
+  `launcher-settings.json` 里的 `rawVersion` 比对（该字段的官方说明就是
+  "Game version used in validation of mods"）。Stellaris 4.5.2 的 `rawVersion` 是 **`v4.5.2`**。
+- 比对规则（启动器 `resources/app.asar` 里的 `satisfiesRange`）：结尾的 `.*` 换成
+  `(?:\..*|)`，其余各段字面转义，首尾锚定，对 `rawVersion` 整串匹配。于是：
+  - `4.5.*` → `^4\.5(?:\..*|)$` → 匹配 `v4.5.2` ❌ 判为不兼容
+  - `v4.5.*` → `^v4\.5(?:\..*|)$` → 匹配 `v4.5.2` ✅
+- 描述文件过不了这一关，游戏侧就不会加载这个 mod；`dlc_load.json` 里即使有它，校验码也不会变。
+  `tools/build.ps1` / `tools/build.sh` 现在会拒绝不带 `v` 的写法。
+
+排查顺序：
+
+1. 看描述文件里的写法（工坊版在
+   `<Steam>\steamapps\workshop\content\281990\<id>\descriptor.mod`，本地版在
+   `Documents\Paradox Interactive\Stellaris\mod\<id>.mod`）：应为
+   `supported_version="v4.5.*"`、`version="1.2.2"`。
+2. 看 `Documents\Paradox Interactive\Stellaris\dlc_load.json` 里有没有
+   `"mod/ugc_<id>.mod"`。启动器只在保存播放集 / 点 Play 时写这个文件 ——
+   改完 mod 要**重启启动器**再点 Play。
+3. 看 `Documents\Paradox Interactive\Stellaris\logs\error.log`：出现
+   `Invalid supported_version in ...` 说明描述文件被游戏判为无效；出现别的解析错误按提示改脚本。
+4. 主菜单校验码不再是 `9776` = mod 已经加载进去了。
+5. 仍然不行就查 DLC：本 mod 覆盖的起源是 `playable = { has_shroud_dlc = yes }`，
+   没装 **Shadows of the Shroud** 时这个起源本来就不可选。
+
+另外两个容易撞的坑：
+
+- 工坊版和本地安装版（`mod/empire_validity_bypass`）同时启用时，启动器里会出现两个同名条目，
+  加载顺序不同会互相覆盖 —— 只留一个。
+- 启动器把 mod 元数据存进 SQLite 后不会自动重读 descriptor：改完要重启启动器（不是重启游戏）。
 
 ## 它改了什么
 
@@ -91,8 +129,9 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 | 项 | 要求 | 当前状态 |
 | --- | --- | --- |
 | `empire_validity_bypass/descriptor.mod` | 含 `version` / `tags` / `name` / `picture` / `supported_version`，**不要**写 `path` | ✅ |
+| `supported_version` | 必须是 `v<主版本>.<次版本>.*`（如 `v4.5.*`）。**缺 `v` 前缀会被启动器判不兼容**，见「排错」一节 | ✅ `v4.5.*` |
 | `empire_validity_bypass/thumbnail.png` | 正方形预览图，512×512 为惯例 | ⚠️ 纯色占位图（`#4B2E83`），正式发布前换成正式美术 |
-| 版本号 | `descriptor.mod` 与根部 `empire_validity_bypass.mod` 两处一致 | ✅ 1.2.1 |
+| 版本号 | `descriptor.mod` 与根部 `empire_validity_bypass.mod` 两处一致 | ✅ 1.2.2 |
 
 上传步骤：
 
@@ -194,6 +233,8 @@ steamcmd 这条路径不吃 `descriptor.mod` 里的 `tags`，第一次上传后�
 - 判定在房主端执行：联机时房主也要启用本 mod，否则该设计仍可能被拒绝。
 - 游戏小版本更新后原版定义可能变化，需要重新对照 `00_origins.txt` 补齐字段。
 - 覆盖定义必须跟原版保持同步，否则会静默丢失原版新增或修改的字段。
+- `supported_version` 必须带 `v` 前缀（`v4.5.*`）：Stellaris 启动器拿它与 `rawVersion`
+  （`v4.5.2`）整串比对，写成 `4.5.*` 会被判为不兼容、游戏不加载。`tools/build.*` 已加护栏。
 
 ## 开发约定
 
@@ -210,6 +251,8 @@ steamcmd 这条路径不吃 `descriptor.mod` 里的 `tags`，第一次上传后�
 - Paradox 脚本在 `.gitattributes` 里标记为 `-text`，git 不做换行转换；`*.png` 标记为 `binary`。
 - 版本号写在 `empire_validity_bypass.mod` 与 `empire_validity_bypass/descriptor.mod` 两处，
   必须同步；`package.ps1` 从 `descriptor.mod` 读取版本号。
+- `supported_version` 同样写在两处，且必须是 `v<主版本>.<次版本>.*`（`v4.5.*`）。写错不报错、
+  只静默失效：启动器判不兼容、游戏不加载。`tools/build.ps1` 还会读本机 `rawVersion` 复验。
 - 换预览图：替换 `empire_validity_bypass/thumbnail.png`（保持文件名与 512×512 尺寸），
   `descriptor.mod` 里的 `picture` 字段不用改。
 

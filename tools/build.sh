@@ -223,6 +223,15 @@ PIC=$(desc_get picture "$DESC")
 [ -n "$SUPV" ] || warn 'descriptor.mod 里没有 supported_version 字段'
 [ -n "$PIC" ] || warn 'descriptor.mod 里没有 picture 字段（工坊会用默认缩略图）'
 
+# ---------------------------------------------------------------- 版本字符串护栏
+# Stellaris 启动器把 descriptor 的 supported_version 原样存成 requiredVersion，再和
+# launcher-settings.json 的 rawVersion（4.5.2 是 "v4.5.2"）做整串正则比对：结尾 ".*"
+# 换成 "(?:\..*|)"、其余字面转义、首尾锚定。写成 "4.5.*" 得到 ^4\.5(?:\..*|)$，
+# 匹配不上 "v4.5.2" —— 启动器判「不兼容」，游戏也就不加载这个 mod。
+if [ -n "$SUPV" ] && ! printf '%s' "$SUPV" | grep -qE '^v[0-9]+\.[0-9]+\.\*$'; then
+    die 2 "supported_version 必须写成 v<主版本>.<次版本>.*（当前 \"$SUPV\"）：缺 v 前缀会被启动器判为不兼容，游戏不会加载该 mod"
+fi
+
 # 工坊内容里的 descriptor.mod 不能带 path=（那是本地安装专用的）
 if grep -qiE '^[[:space:]]*path[[:space:]]*=' "$DESC"; then
     die 2 "descriptor.mod 含有 path= 字段：工坊上传的内容里不能有它（删掉再构建）"
