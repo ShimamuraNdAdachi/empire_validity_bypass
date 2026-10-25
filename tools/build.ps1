@@ -7,8 +7,8 @@
     1. 校验源码：descriptor.mod 字段、path= 字段、预览图、版本号同步
     2. 清空 build\<modid>\ 后重建，只复制需要上传的文件
     3. 剔除 VCS / 开发脚本 / 构建产物 / 系统垃圾 / 美术源文件
-    4. 渲染 build\workshop_build_item.vdf（转义换行与引号）
-    5. 构建后校验文件清单、VDF 行数与引号配对
+    4. 渲染 build\workshop_build_item.vdf（转义引号，换行写真实换行）
+    5. 构建后校验文件清单，并把 VDF 按 KeyValues 读回来逐字比对 description
 
     用法（一般通过 tools\build.bat 调用，参数原样转发）：
         tools\build.bat [-o DIR] [-n] [--no-vdf] [--workshop-id ID] [-h]
@@ -306,19 +306,85 @@ function Get-JsonValue([string]$Path, [string]$Key) {
     return $raw
 }
 
-# 占位符替换 + 转义（\ → \\， " → \"），行之间写字面量 \n
-function Get-VdfValue([string]$Path, [switch]$Substitute) {
-    $lines = [System.IO.File]::ReadAllLines($Path, (New-Object System.Text.UTF8Encoding($false)))
-    $escaped = New-Object System.Collections.Generic.List[string]
-    foreach ($line in $lines) {
-        $t = $line
-        if ($Substitute) {
-            $t = $t.Replace('{{VERSION}}', $Version).Replace('{{SUPPORTED_VERSION}}', $SupportedVersion)
+# 读文本 → 统一成 LF → 替换 {{VERSION}} / {{SUPPORTED_VERSION}}，不做转义
+function Get-RenderedText([string]$Path) {
+    $text = [System.IO.File]::ReadAllText($Path, (New-Object System.Text.UTF8Encoding($false)))
+    $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+    $text = $text.Replace('{{VERSION}}', $Version).Replace('{{SUPPORTED_VERSION}}', $SupportedVersion)
+    return $text.TrimEnd("`n")
+}
+
+# 单行 VDF 转义：\ → \\， " → \"
+function ConvertTo-VdfEscaped([string]$Text) {
+    return $Text.Replace('\', '\\').Replace('"', '\"')
+}
+
+# 换行处理。默认写真实换行（0x0A）：steamcmd 不还原字面量 \n，写进去的 "\n"
+# 会原样印在工坊页面上（1.2.0 那次上传就是这么坏的）。若某个 steamcmd 版本
+# 反而只认转义写法，把 publish.json 的 newlineMode 改成 "escape" 即可切回。
+function ConvertTo-VdfBody([string]$Text, [string]$NewlineMode) {
+    $body = ConvertTo-VdfEscaped $Text
+    if ($NewlineMode -eq 'escape') { $body = $body.Replace("`n", '\n') }
+    return $body
+}
+
+# 按 Valve KeyValues 的读法解析（引号字符串 + { }，转义 \\ \" \n \t），
+# 返回 workshopitem 那一层的键值；结构不合法时返回 $null。
+function Read-VdfDocument([string]$Text) {
+    $tokens = New-Object System.Collections.Generic.List[object]
+    $i = 0
+    $n = $Text.Length
+    while ($i -lt $n) {
+        $c = $Text[$i]
+        if ([char]::IsWhiteSpace($c)) { $i++; continue }
+        if ($c -eq '{' -or $c -eq '}') {
+            $tokens.Add([pscustomobject]@{ Kind = 'brace'; Value = [string]$c })
+            $i++
+            continue
         }
-        $t = $t.Replace('\', '\\').Replace('"', '\"')
-        $escaped.Add($t)
+        if ($c -ne '"') { return $null }
+        $i++
+        $sb = New-Object System.Text.StringBuilder
+        $closed = $false
+        while ($i -lt $n) {
+            $ch = $Text[$i]
+            if ($ch -eq '\') {
+                if (($i + 1) -ge $n) { return $null }
+                $nx = [string]$Text[$i + 1]
+                switch -CaseSensitive ($nx) {
+                    'n'     { [void]$sb.Append("`n") }
+                    't'     { [void]$sb.Append("`t") }
+                    '\'     { [void]$sb.Append('\') }
+                    '"'     { [void]$sb.Append('"') }
+                    default { [void]$sb.Append($nx) }
+                }
+                $i += 2
+                continue
+            }
+            if ($ch -eq '"') { $closed = $true; $i++; break }
+            [void]$sb.Append($ch)
+            $i++
+        }
+        if (-not $closed) { return $null }
+        $tokens.Add([pscustomobject]@{ Kind = 'string'; Value = $sb.ToString() })
     }
-    return ($escaped -join '\n')
+
+    if ($tokens.Count -lt 4) { return $null }
+    if ($tokens[0].Kind -ne 'string' -or $tokens[0].Value -ne 'workshopitem') { return $null }
+    if ($tokens[1].Kind -ne 'brace' -or $tokens[1].Value -ne '{') { return $null }
+    $last = $tokens[$tokens.Count - 1]
+    if ($last.Kind -ne 'brace' -or $last.Value -ne '}') { return $null }
+
+    $pairs = [ordered]@{}
+    $j = 2
+    while ($j -lt ($tokens.Count - 1)) {
+        if ($tokens[$j].Kind -ne 'string') { return $null }
+        if (($j + 1) -ge ($tokens.Count - 1)) { return $null }
+        if ($tokens[$j + 1].Kind -ne 'string') { return $null }
+        $pairs[$tokens[$j].Value] = $tokens[$j + 1].Value
+        $j += 2
+    }
+    return $pairs
 }
 
 if ($WantVdf) {
@@ -367,14 +433,24 @@ if ($WantVdf) {
         Warn ("简介文件 {0} 字节，接近 steamcmd 的 8000 字符上限，上传前留意 VDF 是否被截断" -f $descInfo.Length)
     }
 
-    $VdfTitle = $Title.Replace('\', '\\').Replace('"', '\"')
-    $VdfDesc = Get-VdfValue $DescFile -Substitute
+    # 换行写法：raw（默认，写真实换行）/ escape（写字面量 \n）
+    $NewlineMode = 'raw'
+    if ((Get-JsonValue $PubJson 'newlineMode') -eq 'escape') { $NewlineMode = 'escape' }
+
+    $DescPlain = Get-RenderedText $DescFile
+    $VdfTitle = ConvertTo-VdfEscaped $Title
+    $VdfDesc = ConvertTo-VdfBody $DescPlain $NewlineMode
+    # raw 模式下简介里出现字面量 \n，说明换行又被折成了转义写法（Steam 会原样打印）
+    if ($NewlineMode -ne 'escape' -and $VdfDesc.Contains('\n')) {
+        Fail 4 '简介里出现字面量 \n：确认 newlineMode，或把简介里的反斜杠去掉'
+    }
     $ContentVdf = $Target.Replace('\', '/')
     $PreviewVdf = ([System.IO.Path]::Combine($Target, $PreviewRel)).Replace('\', '/')
 
     $noteRaw = Get-JsonValue $PubJson 'changenote'
     if ($noteRaw) {
-        $VdfNote = $noteRaw.Replace('\', '\\').Replace('"', '\"')
+        # publish.json 里用一行写时，\n 当作分行
+        $NotePlain = $noteRaw.Replace('\n', "`n")
     } else {
         # CHANGELOG 里 "## <版本>" 那一节的 "- " 条目
         $noteLines = New-Object System.Collections.Generic.List[string]
@@ -388,13 +464,20 @@ if ($WantVdf) {
                     continue
                 }
                 if ($inSection -and $line.StartsWith('- ')) {
-                    $noteLines.Add($line.Substring(2).Replace('\', '\\').Replace('"', '\"'))
+                    $noteLines.Add($line.Substring(2).TrimEnd())
+                    continue
+                }
+                # CHANGELOG 里折行的条目（续行缩进）接回上一条，别把句子截断在工坊页面上
+                if ($inSection -and $noteLines.Count -gt 0 -and $line -match '^\s+\S') {
+                    $last = $noteLines.Count - 1
+                    $noteLines[$last] = $noteLines[$last] + ' ' + $line.Trim()
                 }
             }
         }
         if ($noteLines.Count -eq 0) { Warn "CHANGELOG 里没有 $Version 的条目，changenote 为空" }
-        $VdfNote = ($noteLines -join '\n')
+        $NotePlain = ($noteLines -join "`n")
     }
+    $VdfNote = ConvertTo-VdfBody $NotePlain $NewlineMode
 
     $vdfLines = @(
         '"workshopitem"'
@@ -414,16 +497,25 @@ if ($WantVdf) {
     [System.IO.File]::WriteAllText($VdfPath, $vdfText, (New-Object System.Text.UTF8Encoding($false)))
     $VdfWritten = $true
 
-    $vdfCheck = [System.IO.File]::ReadAllLines($VdfPath, (New-Object System.Text.UTF8Encoding($false)))
-    if ($vdfCheck.Count -ne 11) {
-        Fail 4 ("VDF 行数异常（{0}，应为 11）：有一次换行没转义成 \n" -f $vdfCheck.Count)
+    # 自检：按 KeyValues 的读法把 VDF 读回来，逐字比对字段。
+    # 换行写错（字面量 \n、或是多出一个裸引号）在这里就会挂掉，
+    # 不会等到传上工坊才发现简介变成一行 "\n"。
+    $Doc = Read-VdfDocument $vdfText
+    if (-not $Doc) {
+        Fail 4 'VDF 解析失败：引号、转义或花括号没配对（description 里有落单的引号或反斜杠？）'
     }
-    if ($vdfCheck[0] -ne '"workshopitem"') { Fail 4 'VDF 第一行不是 "workshopitem"' }
-    $quoteTotal = ([regex]::Matches($vdfText, '"')).Count
-    $quoteEscaped = ([regex]::Matches($vdfText, '\\"')).Count
-    if (($quoteTotal - $quoteEscaped) -ne 34) {
-        Fail 4 ("VDF 引号未配对（未转义引号 {0} 个，应为 34）" -f ($quoteTotal - $quoteEscaped))
+    foreach ($key in @('appid', 'publishedfileid', 'contentfolder', 'previewfile', 'title',
+                       'description', 'changenote', 'visibility')) {
+        if (-not $Doc.Contains($key)) { Fail 4 ("VDF 缺少字段：{0}" -f $key) }
     }
+    if ($Doc['description'] -cne $DescPlain) {
+        Fail 4 'VDF 的 description 与 description.bbcode 渲染结果不一致'
+    }
+    if ($Doc['title'] -cne $Title) { Fail 4 'VDF 的 title 与源不一致' }
+    if ($Doc['changenote'] -cne $NotePlain) { Fail 4 'VDF 的 changenote 与 CHANGELOG / publish.json 不一致' }
+    if ($Doc['contentfolder'] -ne $ContentVdf) { Fail 4 'VDF 的 contentfolder 与构建目录不一致' }
+    if ($Doc['previewfile'] -ne $PreviewVdf) { Fail 4 'VDF 的 previewfile 与构建目录不一致' }
+    if ($Doc['visibility'] -ne $Visibility) { Fail 4 'VDF 的 visibility 与 publish.json 不一致' }
 }
 
 # ---------------------------------------------------------------- 报告

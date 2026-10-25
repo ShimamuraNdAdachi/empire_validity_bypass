@@ -92,7 +92,7 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 | --- | --- | --- |
 | `empire_validity_bypass/descriptor.mod` | 含 `version` / `tags` / `name` / `picture` / `supported_version`，**不要**写 `path` | ✅ |
 | `empire_validity_bypass/thumbnail.png` | 正方形预览图，512×512 为惯例 | ⚠️ 纯色占位图（`#4B2E83`），正式发布前换成正式美术 |
-| 版本号 | `descriptor.mod` 与根部 `empire_validity_bypass.mod` 两处一致 | ✅ 1.2.0 |
+| 版本号 | `descriptor.mod` 与根部 `empire_validity_bypass.mod` 两处一致 | ✅ 1.2.1 |
 
 上传步骤：
 
@@ -134,7 +134,7 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 | `appid` | `publish.json` 的 `appId`，缺省 281990 |
 | `contentfolder` / `previewfile` | 绝对路径，指向 `build/empire_validity_bypass/` 与其中的预览图 |
 | `title` | `publish.json` 的 `title`，为空时用 `descriptor.mod` 的 `name` |
-| `description` | `tools/workshop/description.bbcode`；`{{VERSION}}` / `{{SUPPORTED_VERSION}}` 会被替换，换行转义成 `\n` |
+| `description` | `tools/workshop/description.bbcode`；`{{VERSION}}` / `{{SUPPORTED_VERSION}}` 会被替换，换行写成真实换行（`publish.json` 的 `newlineMode: escape` 可切回字面量 `\n`） |
 | `changenote` | `CHANGELOG.md` 里 `## <版本>` 那一节的条目（`publish.json` 有 `changenote` 就用它） |
 | `visibility` | `publish.json` 的 `public` / `friends` / `private` / `unlisted` → `0` / `1` / `2` / `3` |
 | `publishedfileid` | `tools/workshop/publishedfileid.txt`（纯数字），没有就是 `0` = 首次上传 |
@@ -149,6 +149,19 @@ steamcmd +login <账号> +workshop_build_item "<仓库>/build/workshop_build_ite
 
 steamcmd 这条路径不吃 `descriptor.mod` 里的 `tags`，第一次上传后到物品页手动勾一次即可。
 `build/` 和 `*.vdf` 都在 `.gitignore` 里，VDF 不会被提交。
+
+#### 简介的两个坑
+
+工坊简介是 Steam 的 BBCode，写错不报错、直接印在页面上：
+
+- **只认有限的标签**：`[h1]`–`[h3]`、`[b]`、`[i]`、`[u]`、`[strike]`、`[spoiler]`、`[code]`、
+  `[noparse]`、`[url]`、`[img]`、`[list]`/`[olist]` + `[*]`、`[quote]`、`[table]`、`[hr][/hr]`。
+  `[size=5]`、`[color=…]`、`[font=…]` 都不是 Steam 标签，写了只会把标签本身打印出来
+  （1.2.0 的标题就是这么坏的，改用 `[h1]`）。要把标签当文字示例，套 `[noparse]…[/noparse]`。
+- **换行就是换行**：Steam 不合并软换行，行内别手动折行；`description` 里的换行由 build 脚本写成
+  真实换行（`0x0A`）。steamcmd 不还原字面量 `\n`——1.2.0 上传后整篇简介挤成一行、行间显示 `\n`
+  就是这个原因。真遇到过只认转义写法的 steamcmd，把 `publish.json` 的 `"newlineMode"` 改成
+  `"escape"` 重建即可。
 
 上传之后：
 

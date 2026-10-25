@@ -1,5 +1,16 @@
 # 变更记录
 
+## 1.2.1
+
+- 修正创意工坊简介的标题：原先用的 size=5 不是 Steam 支持的 BBCode 标签（会被原样打印成文字），
+  改用 h1 标题标签。
+- 修正上传 VDF 的换行：description / changenote 改为写真实换行。steamcmd 不还原字面量 \n，
+  1.2.0 上传后工坊页面上整篇简介挤成一行、行间显示 \n。publish.json 的 newlineMode 可切回
+  escape（raw 为默认）。
+- build 脚本的自检从「VDF 必须是 11 行」换成按 KeyValues 读回并逐字比对 description / title /
+  changenote，换行或引号写错时在本地就报错；changenote 现在会接上 CHANGELOG 里的折行。
+- mod 内容与 1.2.0 相同，仅工坊页面信息与发布工具链变化。
+
 ## 1.2.0
 
 - 补齐创意工坊上传所需文件：`empire_validity_bypass/thumbnail.png`（512×512 纯色占位图，

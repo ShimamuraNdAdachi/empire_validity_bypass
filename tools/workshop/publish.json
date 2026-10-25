@@ -4,6 +4,7 @@
   "visibility": "unlisted",
   "tags": [],
   "descriptionFile": "tools/workshop/description.bbcode",
+  "newlineMode": "raw",
   "previewFile": "thumbnail.png",
   "changenoteFromChangelog": true
 }

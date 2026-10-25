@@ -4,7 +4,7 @@
 # ------------------------------------------------------------
 # 源：empire_validity_bypass/          （mod 本体，即工坊上传内容）
 # 出：build/empire_validity_bypass/    （只含需要上传的文件）
-#     build/workshop_build_item.vdf    （steamcmd 上传参数，转义好的）
+#     build/workshop_build_item.vdf    （steamcmd 上传参数，引号已转义、换行为真实换行）
 #
 # 被排除、不进 build/ 的东西：
 #   .git/ .github/ .vscode/ .idea/ ...           VCS 与编辑器
@@ -42,8 +42,8 @@ usage() {
 用法: tools/build.sh [-o DIR] [-n] [--no-vdf] [--workshop-id ID] [-h]
 
 把本 mod 需要上传到 Steam 创意工坊的文件提取到 build/empire_validity_bypass/，
-并在 build/workshop_build_item.vdf 渲染出 steamcmd 上传用的 VDF（含转义后的
-描述、changenote、绝对路径）。
+并在 build/workshop_build_item.vdf 渲染出 steamcmd 上传用的 VDF（描述与
+changenote 的引号已转义、换行写成真实换行）。
 .git、tools/、dist/、README.md、根目录 .mod、系统垃圾等一律不进 build。
 
 选项:
@@ -345,18 +345,25 @@ json_get() {
     printf '%s' "$raw"
 }
 
-# 把每行转义（\ → \\， " → \"），换行由调用方决定
-vdf_escape_lines() {
-    sed -e 's/\r$//' -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+# 单行转义：\ → \\， " → \"（不动换行）
+vdf_escape_text() {
+    sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
-# 把多行接成一行，行之间写字面量 \n（VDF 里的换行写法）
-vdf_join_lines() {
-    awk 'BEGIN { ORS = "" } NR > 1 { printf "\\n" } { printf "%s", $0 }'
+# 换行处理：raw（默认）保留真实换行；escape 折成字面量 \n。
+# steamcmd 不还原字面量 \n，写进去的 "\n" 会原样印在工坊页面上
+# （1.2.0 那次上传就是这么坏的），所以默认 raw。
+vdf_fold_newlines() {
+    if [ "$NEWLINE_MODE" = 'escape' ]; then
+        awk 'BEGIN { ORS = "" } NR > 1 { printf "\\n" } { printf "%s", $0 }'
+    else
+        cat
+    fi
 }
-# 占位符替换 → 转义 → 接行
+# 占位符替换 → 转义 → 换行处理
 vdf_escape_file() {
-    sed -e "s|{{SUPPORTED_VERSION}}|$SUPV|g" -e "s|{{VERSION}}|$VER|g" "$1" \
-        | vdf_escape_lines | vdf_join_lines
+    sed -e 's/\r$//' \
+        -e "s|{{SUPPORTED_VERSION}}|$SUPV|g" -e "s|{{VERSION}}|$VER|g" "$1" \
+        | vdf_escape_text | vdf_fold_newlines
 }
 
 VDF_OUT="$(dirname -- "$TARGET")/workshop_build_item.vdf"
@@ -397,27 +404,34 @@ else
     fi
     [ -n "$PUB_ID" ] || PUB_ID=0
 
-    TITLE_ESC=$(printf '%s' "$TITLE" | vdf_escape_lines | vdf_join_lines)
+    # 换行写法：raw（默认，写真实换行）/ escape（写字面量 \n）
+    NEWLINE_MODE=$(json_get "$PUB_JSON" newlineMode)
+    [ "$NEWLINE_MODE" = 'escape' ] || NEWLINE_MODE=raw
+
+    TITLE_ESC=$(printf '%s' "$TITLE" | vdf_escape_text)
     DESC_ESC=$(vdf_escape_file "$DESC_FILE")
 
     CFG_NOTE=$(json_get "$PUB_JSON" changenote)
     if [ -n "$CFG_NOTE" ]; then
-        NOTE_ESC=$(printf '%s' "$CFG_NOTE" | vdf_escape_lines | vdf_join_lines)
+        NOTE_ESC=$(printf '%s' "$CFG_NOTE" | sed 's/\\n/\n/g' | vdf_escape_text | vdf_fold_newlines)
     else
-        # 从 CHANGELOG 取当前版本那一节的项目符号
+        # 从 CHANGELOG 取当前版本那一节的项目符号；缩进的续行接回上一条
         NOTE_ESC=$(awk -v want="$VER" '
+            function emit() { for (i = 1; i <= n; i++) printf "%s%s", (i > 1 ? "\n" : ""), item[i] }
             /^## / {
-                if (found) exit
-                if (index($0, "## " want) == 1) found = 1
+                if (state == 1) { emit(); state = 2 }
+                else if (state == 0 && index($0, "## " want) == 1) { state = 1 }
                 next
             }
-            found && /^- / { print substr($0, 3) }
-        ' "$REPO_ROOT/CHANGELOG.md" | vdf_escape_lines | vdf_join_lines)
+            state == 1 && /^- / { n++; item[n] = substr($0, 3); next }
+            state == 1 && /^[ \t]+[^ \t]/ { s = $0; sub(/^[ \t]+/, "", s); if (n > 0) item[n] = item[n] " " s; next }
+            END { if (state == 1) emit() }
+        ' "$REPO_ROOT/CHANGELOG.md" | vdf_escape_text | vdf_fold_newlines)
         [ -n "$NOTE_ESC" ] || warn "CHANGELOG 里没有 $VER 的条目，changenote 为空"
     fi
 
-    CONTENT_ESC=$(printf '%s' "$TARGET" | vdf_escape_lines)
-    PREVIEW_ESC=$(printf '%s' "$TARGET/$PREVIEW_REL" | vdf_escape_lines)
+    CONTENT_ESC=$(printf '%s' "$TARGET" | vdf_escape_text)
+    PREVIEW_ESC=$(printf '%s' "$TARGET/$PREVIEW_REL" | vdf_escape_text)
 
     {
         printf '"workshopitem"\n{\n'
@@ -433,18 +447,29 @@ else
     } > "$VDF_OUT"
     VDF_WRITTEN=1
 
-    # 校验：行数必须是 11（描述里有裸换行就会变多），未转义的引号必须是 34 个
-    VDF_LINES=$(wc -l < "$VDF_OUT" | tr -d ' ')
-    if [ "$VDF_LINES" != '11' ]; then
-        die 4 "VDF 行数异常（$VDF_LINES，应为 11）：有一次换行没转义成 \\n"
-    fi
+    # 校验：8 个字段都在、花括号收尾、未转义引号 34 个；
+    # raw 模式下不允许再出现字面量 \n（那正是简介显示成一行 "\n" 的原因）
+    head -n 1 "$VDF_OUT" | grep -q '^"workshopitem"$' ||
+        die 4 'VDF 第一行不是 "workshopitem"'
+    for k in appid publishedfileid contentfolder previewfile title description changenote visibility; do
+        grep -q "\"$k\"" "$VDF_OUT" || die 4 "VDF 缺少字段：$k"
+    done
+    [ "$(tail -n 1 "$VDF_OUT")" = '}' ] || die 4 'VDF 最后一行不是 }'
     Q_TOTAL=$(grep -oF '"' "$VDF_OUT" 2>/dev/null | wc -l | tr -d ' ' || true)
     Q_ESC=$(grep -oF '\"' "$VDF_OUT" 2>/dev/null | wc -l | tr -d ' ' || true)
     if [ $((Q_TOTAL - Q_ESC)) -ne 34 ]; then
         die 4 "VDF 引号未配对（未转义引号 $((Q_TOTAL - Q_ESC)) 个，应为 34）"
     fi
-    head -n 1 "$VDF_OUT" | grep -q '^"workshopitem"$' ||
-        die 4 'VDF 第一行不是 "workshopitem"'
+    if [ "$NEWLINE_MODE" != 'escape' ]; then
+        DESC_BLOCK=$(awk '
+            index($0, "\t\"description\"") == 1 { f = 1 }
+            index($0, "\t\"changenote\"") == 1 { f = 0 }
+            f
+        ' "$VDF_OUT")
+        if printf '%s\n' "$DESC_BLOCK" | grep -q '\\n'; then
+            die 4 '简介里还有字面量 \n：换行没有写成真实换行'
+        fi
+    fi
 fi
 
 # ---------------------------------------------------------------- 报告

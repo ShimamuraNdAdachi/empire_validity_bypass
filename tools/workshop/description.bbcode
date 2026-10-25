@@ -1,7 +1,6 @@
-[size=5][b]虚境铸造：游牧兼容[/b][/size]
+[h1]虚境铸造：游牧兼容[/h1]
 
-去除了[b]origin_shroud_forged[/b] 的 [b]possible[/b] 里的 [b]is_nomadic = no[/b]，
-于是「游牧 + 虚境铸造」的帝国设计可以通过起源合法性校验。
+去除了 [b]origin_shroud_forged[/b] 的 [b]possible[/b] 里的 [b]is_nomadic = no[/b]，于是「游牧 + 虚境铸造」的帝国设计可以通过起源合法性校验。
 
 [h3]环境[/h3]
 [list]
@@ -21,8 +20,8 @@
 
 [h3]实现方式[/h3]
 [code]common/governments/civics[/code] 是 LIOS（后加载覆盖先加载）。
-本 mod 用一个 [b]zzz_[/b] 前缀的文件重定义同样的 [b]origin_shroud_forged[/b] 条目，
-保证排在原版 [code]00_origins.txt[/code] 之后加载，从而覆盖原版定义；除此之外不修改任何文件。
+
+本 mod 用一个 [b]zzz_[/b] 前缀的文件重定义同样的 [b]origin_shroud_forged[/b] 条目，保证排在原版 [code]00_origins.txt[/code] 之后加载，从而覆盖原版定义；除此之外不修改任何文件。
 
 [h3]已知限制[/h3]
 [list]
@@ -32,7 +31,7 @@
 [/list]
 
 [h3]代码仓库[/h3]
-https://github.com/ShimamuraNdAdachi/empire_validity_bypass
+[url=https://github.com/ShimamuraNdAdachi/empire_validity_bypass]github.com/ShimamuraNdAdachi/empire_validity_bypass[/url]
 
 [h3]卸载[/h3]
 取消订阅即可
