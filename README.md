@@ -69,10 +69,12 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 │  ├─ common.ps1
 │  ├─ install.ps1
 │  ├─ package.ps1
-│  ├─ build.bat                              # 提取工坊上传集合 → build\（Windows）
+│  ├─ build.bat                              # 纯 ASCII 启动器，转调 build.ps1（Windows）
+│  ├─ build.ps1                              # 提取上传集合 + 渲染 VDF 的实现
 │  └─ build.sh                               # 同上（Linux / macOS / Git Bash）
 ├─ build/                                    # build 脚本产物，不入库
-│  └─ empire_validity_bypass/                #   ← 创意工坊的 contentfolder
+│  ├─ empire_validity_bypass/                #   ← 创意工坊的 contentfolder
+│  └─ workshop_build_item.vdf                #   ← steamcmd 上传参数（不随内容上传）
 ├─ CHANGELOG.md
 ├─ LICENSE
 ├─ README.md
@@ -97,7 +99,7 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 0. 先跑构建脚本，把「只该上传的东西」提取到 `build/empire_validity_bypass/`：
 
    ```powershell
-   .\tools\build.bat          # Windows（cmd，不依赖 PowerShell）
+   .\tools\build.bat          # Windows（启动器会调 tools\build.ps1）
    ```
 
    ```bash
@@ -165,8 +167,9 @@ steamcmd 这条路径不吃 `descriptor.mod` 里的 `tags`，第一次上传后�
 | --- | --- |
 | `tools/install.ps1` | 本地安装：复制到用户数据目录、旧副本改名备份、`-Enable` 写 `dlc_load.json`、`-GameDataPath` 指定非默认目录 |
 | `tools/package.ps1` | 打包 `dist/empire_validity_bypass-v<版本>.zip`（非工坊分发用），校验包内清单并输出 SHA256 |
-| `tools/build.bat` | 提取创意工坊上传集合到 `build\empire_validity_bypass\`，并渲染 `build\workshop_build_item.vdf`：清空重建、剔除无关文件、转义 VDF、校验后打印清单（cmd，不依赖 PowerShell） |
-| `tools/build.sh` | 同上，Linux / macOS / Git Bash 用；规则与 `build.bat` 一致，产物逐字节相同 |
+| `tools/build.bat` | 纯 ASCII 启动器：挑 `pwsh` / `powershell` 并把参数原样转给 `build.ps1` |
+| `tools/build.ps1` | Windows 侧实现：提取上传集合到 `build\empire_validity_bypass\`、渲染 `build\workshop_build_item.vdf`、清空重建、剔除无关文件、转义 VDF、校验后打印清单 |
+| `tools/build.sh` | 同上，Linux / macOS / Git Bash 用；规则与 `build.ps1` 一致，VDF 逐字节相同（只有绝对路径是各自平台的写法） |
 | `tools/common.ps1` | 路径探测（Steam 库 / Paradox 用户数据目录）等公共函数 |
 
 `package.ps1` 出的 zip 是给「不想用 Steam 订阅」或自测的人用的：结构是 `mod/<id>.mod` +
@@ -185,8 +188,12 @@ steamcmd 这条路径不吃 `descriptor.mod` 里的 `tags`，第一次上传后�
 - `tools/*.ps1`：UTF-8 **带 BOM**（Windows PowerShell 5.1 读无 BOM 文件会把中文当 ANSI，
   导致解析报错）。编辑后确认前三个字节是 `EF BB BF`。
 - `tools/*.sh`：UTF-8 **无 BOM + LF**（CRLF 会让 bash 报 `$'\r': command not found`）。
-- `tools/*.bat`：UTF-8 **无 BOM + CRLF**（cmd 会把 BOM 当命令名；LF 会拆错行，
-  而且脚本里靠 `chcp 65001` 显示中文，所以首行必须是纯 ASCII 的 `@echo off`）。
+- `tools/build.bat`：**必须是纯 ASCII + CRLF**，逻辑一行都不要写进去。cmd 按字节读批处理并用
+  当前代码页解码，中文跨过读缓冲边界时解析会错位，`rem` 行的后半截会被当成命令执行
+  （`'<片段>' is not recognized as an internal or external command`）。所以它在
+  `chcp`/UTF-8 上什么花活都不做，只负责转调 `tools/build.ps1`。
+- `tools/*.ps1`：UTF-8 **带 BOM**（见上一条），CRLF。
+- 换行约定写在 `.gitattributes`：`*.sh` 强制 LF，`*.bat` / `*.ps1` 强制 CRLF。
 - Paradox 脚本在 `.gitattributes` 里标记为 `-text`，git 不做换行转换；`*.png` 标记为 `binary`。
 - 版本号写在 `empire_validity_bypass.mod` 与 `empire_validity_bypass/descriptor.mod` 两处，
   必须同步；`package.ps1` 从 `descriptor.mod` 读取版本号。

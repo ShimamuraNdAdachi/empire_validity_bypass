@@ -35,7 +35,7 @@ trim_trailing_whitespace = false
 end_of_line = lf
 charset = utf-8
 
-# 批处理：必须 CRLF + 无 BOM（cmd 会把 BOM 当命令，LF 会拆错行）
+# 批处理：必须 CRLF + 无 BOM，且只写纯 ASCII（中文会让 cmd 解析错位）
 [*.bat]
 end_of_line = crlf
 charset = utf-8

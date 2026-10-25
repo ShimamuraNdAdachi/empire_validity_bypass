@@ -31,7 +31,8 @@
 *.ps1      text eol=crlf
 *.psm1     text eol=crlf
 *.sh       text eol=lf
-# 批处理必须 CRLF：cmd 读 LF 的 .bat 会把行拆错（报 'ath' 不是内部命令）
+# 批处理必须 CRLF，且内容保持纯 ASCII：cmd 按字节读批处理并用当前代码页解码，
+# 中文跨过读缓冲边界时会把行拆错（报 'xxx' 不是内部命令）。逻辑放 build.ps1。
 *.bat      text eol=crlf
 *.json     text eol=lf
 .github/** text eol=lf
