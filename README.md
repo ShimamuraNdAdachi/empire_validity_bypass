@@ -111,7 +111,8 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 │  ├─ build.ps1                              # 提取上传集合 + 渲染 VDF 的实现
 │  └─ build.sh                               # 同上（Linux / macOS / Git Bash）
 ├─ build/                                    # build 脚本产物，不入库
-│  ├─ empire_validity_bypass/                #   ← 创意工坊的 contentfolder
+│  ├─ empire_validity_bypass/                #   ← 创意工坊的 contentfolder（里面的描述文件叫 descriptor.mod）
+│  ├─ empire_validity_bypass.mod             #   ← 只有 --local-mod 才写：本地安装用，在 contentfolder 之外
 │  └─ workshop_build_item.vdf                #   ← steamcmd 上传参数（不随内容上传）
 ├─ CHANGELOG.md
 ├─ LICENSE
@@ -152,8 +153,17 @@ stellaris/                                   # 等价于游戏目录下的 Stell
    `descriptor.mod` 里混进 `path=`、有被排除的文件残留都会直接报错退出）。
    同时会在 `build/workshop_build_item.vdf` 渲染好 steamcmd 上传参数。
 
+   **描述文件只有一份，而且必须叫 `descriptor.mod`**：工坊内容里只认
+   `build/empire_validity_bypass/descriptor.mod`，构建时会与源码逐字节核对；仓库根的
+   `empire_validity_bypass.mod`（带 `path=`）是本地安装专用的，它一旦出现在 contentfolder
+   或源 mod 目录里就判构建失败。想在 `build/` 下也备一份本地安装用的 `<id>.mod`，加
+   `--local-mod`：脚本从 `descriptor.mod` 派生、补 `path="mod/empire_validity_bypass"`，
+   写在 contentfolder 之外（不会上传）；装的时候把它和 `build/empire_validity_bypass/`
+   一起复制到 `Stellaris\mod\` 即可。
+
    常用参数：`-h` 看帮助，`-n` 只演练（产物写临时目录、不碰 `build/`），
-   `-o DIR` 换输出根目录，`--no-vdf` 跳过 VDF，`--workshop-id ID` 临时指定物品 ID。
+   `-o DIR` 换输出根目录，`--no-vdf` 跳过 VDF，`--workshop-id ID` 临时指定物品 ID，
+   `--local-mod` 额外生成本地安装用的 `<id>.mod`。
    `-o` 指向源码目录或仓库根的上级会被拒绝——脚本要清空目标目录，护栏是必须的。
 
 1. 完全退出游戏（启动器保持运行）。
@@ -220,7 +230,7 @@ steamcmd 这条路径不吃 `descriptor.mod` 里的 `tags`，第一次上传后�
 | `tools/install.ps1` | 本地安装：复制到用户数据目录、旧副本改名备份、`-Enable` 写 `dlc_load.json`、`-GameDataPath` 指定非默认目录 |
 | `tools/package.ps1` | 打包 `dist/empire_validity_bypass-v<版本>.zip`（非工坊分发用），校验包内清单并输出 SHA256 |
 | `tools/build.bat` | 纯 ASCII 启动器：挑 `pwsh` / `powershell` 并把参数原样转给 `build.ps1` |
-| `tools/build.ps1` | Windows 侧实现：提取上传集合到 `build\empire_validity_bypass\`、渲染 `build\workshop_build_item.vdf`、清空重建、剔除无关文件、转义 VDF、校验后打印清单 |
+| `tools/build.ps1` | Windows 侧实现：提取上传集合到 `build\empire_validity_bypass\`、渲染 `build\workshop_build_item.vdf`、清空重建、剔除无关文件、转义 VDF、校验后打印清单；contentfolder 里只允许 `descriptor.mod` 一个 `.mod` |
 | `tools/build.sh` | 同上，Linux / macOS / Git Bash 用；规则与 `build.ps1` 一致，VDF 逐字节相同（只有绝对路径是各自平台的写法） |
 | `tools/common.ps1` | 路径探测（Steam 库 / Paradox 用户数据目录）等公共函数 |
 

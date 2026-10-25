@@ -12,7 +12,8 @@
 #   README.md CHANGELOG.md LICENSE               仓库文档（工坊简介另存 bbcode）
 #   Thumbs.db desktop.ini *.swp *.bak *.log ...  系统垃圾与临时文件
 #   *.psd *.xcf *.zip *.7z ...                   美术源文件与压缩包
-#   empire_validity_bypass.mod                   含 path= 的本地描述文件
+#   empire_validity_bypass.mod                   含 path= 的本地描述文件（只给本地安装；
+#                                                工坊内容只认 descriptor.mod）
 #
 # VDF 的 title/description/changenote/visibility/appId 来自
 # tools/workshop/publish.json 与 CHANGELOG.md；物品 ID 取自
@@ -28,7 +29,8 @@
 set -euo pipefail
 
 MOD_ID='empire_validity_bypass'
-MOD_FILE="${MOD_ID}.mod"
+MOD_FILE="${MOD_ID}.mod"                  # 本地安装：仓库根 / 用户数据目录的 <id>.mod（含 path=）
+WORKSHOP_DESCRIPTOR='descriptor.mod'      # 工坊上传：contentfolder 根部只认这个文件名
 SCRIPT_REL='common/governments/civics/zzz_empire_validity_bypass_origins.txt'
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -39,18 +41,24 @@ WARNINGS=()
 
 usage() {
     cat <<'EOF'
-用法: tools/build.sh [-o DIR] [-n] [--no-vdf] [--workshop-id ID] [-h]
+用法: tools/build.sh [-o DIR] [-n] [--no-vdf] [--workshop-id ID] [--local-mod] [-h]
 
 把本 mod 需要上传到 Steam 创意工坊的文件提取到 build/empire_validity_bypass/，
 并在 build/workshop_build_item.vdf 渲染出 steamcmd 上传用的 VDF（描述与
 changenote 的引号已转义、换行写成真实换行）。
-.git、tools/、dist/、README.md、根目录 .mod、系统垃圾等一律不进 build。
+.git、tools/、dist/、README.md、根目录 <modid>.mod、系统垃圾等一律不进 build。
+
+描述文件：工坊内容里只认 empire_validity_bypass/descriptor.mod（不含 path=），
+构建后会与源码逐字节核对；仓库根的 empire_validity_bypass.mod 只为本地安装存在，
+它一旦出现在 contentfolder 里就判构建失败。
 
 选项:
   -o, --out DIR       构建输出根目录，默认 <仓库>/build
   -n, --dry-run       演练：产物写到临时目录，列出清单后删除，不动 build/
       --no-vdf        只做内容构建，不渲染 workshop_build_item.vdf
       --workshop-id   物品 ID，覆盖 tools/workshop/publishedfileid.txt
+      --local-mod     额外在 contentfolder 之外写 build/<modid>.mod（本地安装用，
+                      由 descriptor.mod 派生并补 path="mod/<modid>"，不会上传）
   -h, --help          显示本帮助
 
 VDF 配置来自 tools/workshop/publish.json（appId / title / visibility /
@@ -135,6 +143,7 @@ png_size() {
 OUT_ARG=''
 DRY_RUN=0
 WANT_VDF=1
+LOCAL_MOD=0
 WORKSHOP_ID_ARG=''
 while [ $# -gt 0 ]; do
     case $1 in
@@ -147,6 +156,8 @@ while [ $# -gt 0 ]; do
             DRY_RUN=1; shift ;;
         --no-vdf)
             WANT_VDF=0; shift ;;
+        --local-mod)
+            LOCAL_MOD=1; shift ;;
         --workshop-id)
             [ $# -ge 2 ] || die 3 "$1 需要一个 ID"
             WORKSHOP_ID_ARG=$2; shift 2 ;;
@@ -210,8 +221,15 @@ esac
 
 # ---------------------------------------------------------------- 源校验
 [ -d "$SRC" ] || die 2 "缺少 mod 目录：$SRC"
-DESC="$SRC/descriptor.mod"
-[ -f "$DESC" ] || die 2 "缺少描述文件：$DESC"
+# 工坊版只用 contentfolder 里的 descriptor.mod；<id>.mod 是本地安装的配套描述文件
+# （Documents/.../Stellaris/mod/<id>.mod），混进工坊内容会让订阅端多出第二份描述文件。
+DESC="$SRC/$WORKSHOP_DESCRIPTOR"
+[ -f "$DESC" ] || die 2 "缺少描述文件：$DESC（工坊版只用 $WORKSHOP_DESCRIPTOR）"
+
+while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    die 2 "mod 目录里只能有 $WORKSHOP_DESCRIPTOR 一个 .mod（多出：${m#"$SRC"/}）：工坊版用 $WORKSHOP_DESCRIPTOR；$MOD_FILE 只服务本地安装，放在仓库根，不进 build"
+done < <(find "$SRC" -name '*.mod' ! -name "$WORKSHOP_DESCRIPTOR" -print 2>/dev/null | LC_ALL=C sort)
 
 VER=$(desc_get version "$DESC")
 MOD_NAME=$(desc_get name "$DESC")
@@ -232,9 +250,9 @@ if [ -n "$SUPV" ] && ! printf '%s' "$SUPV" | grep -qE '^v[0-9]+\.[0-9]+\.\*$'; t
     die 2 "supported_version 必须写成 v<主版本>.<次版本>.*（当前 \"$SUPV\"）：缺 v 前缀会被启动器判为不兼容，游戏不会加载该 mod"
 fi
 
-# 工坊内容里的 descriptor.mod 不能带 path=（那是本地安装专用的）
+# 工坊内容里的 descriptor.mod 不能带 path=（那是本地安装 <id>.mod 专用的）
 if grep -qiE '^[[:space:]]*path[[:space:]]*=' "$DESC"; then
-    die 2 "descriptor.mod 含有 path= 字段：工坊上传的内容里不能有它（删掉再构建）"
+    die 2 "$WORKSHOP_DESCRIPTOR 含有 path= 字段：工坊上传的内容里不能有它（删掉再构建）"
 fi
 
 if [ -n "$PIC" ]; then
@@ -302,22 +320,34 @@ done < "$KEEP"
 # ---------------------------------------------------------------- 构建后校验
 FAILS=()
 
-[ -f "$TARGET/descriptor.mod" ] || FAILS+=('descriptor.mod 没有进 build')
-[ -f "$TARGET/$SCRIPT_REL" ]    || FAILS+=("缺少 $SCRIPT_REL")
+DESC_BUILD="$TARGET/$WORKSHOP_DESCRIPTOR"
+if [ ! -f "$DESC_BUILD" ]; then
+    FAILS+=("$WORKSHOP_DESCRIPTOR 没有进 build（工坊版只会用这一个描述文件）")
+else
+    # 与源码逐字节一致：手改过 build/ 里的副本、或复制时换了编码/换行都要当场发现
+    cmp -s -- "$DESC" "$DESC_BUILD" ||
+        FAILS+=("build 里的 $WORKSHOP_DESCRIPTOR 与源码不一致（被改过？重跑构建）")
+    if grep -qiE '^[[:space:]]*path[[:space:]]*=' "$DESC_BUILD"; then
+        FAILS+=("build 里的 $WORKSHOP_DESCRIPTOR 含 path= 字段（那是本地安装 <id>.mod 才有的）")
+    fi
+fi
+
+[ -f "$TARGET/$SCRIPT_REL" ] || FAILS+=("缺少 $SCRIPT_REL")
 
 if [ -n "$PIC" ] && [ ! -f "$TARGET/$PIC" ]; then
     FAILS+=("缺少预览图 $PIC")
 fi
 
-if grep -qiE '^[[:space:]]*path[[:space:]]*=' "$TARGET/descriptor.mod"; then
-    FAILS+=('build 里的 descriptor.mod 含 path= 字段')
-fi
-
-# 根目录只允许 descriptor.mod 一个 .mod 文件
+# contentfolder 里只允许 descriptor.mod 一个 .mod；<id>.mod 只给本地安装用
 while IFS= read -r m; do
     [ -n "$m" ] || continue
-    [ "${m##*/}" = 'descriptor.mod' ] || FAILS+=("build 里混入了 .mod 文件：$m")
-done < <(find "$TARGET" -maxdepth 1 -name '*.mod' -print 2>/dev/null | LC_ALL=C sort)
+    [ "${m##*/}" = "$WORKSHOP_DESCRIPTOR" ] && continue
+    if [ "${m##*/}" = "$MOD_FILE" ]; then
+        FAILS+=("contentfolder 里出现了 ${m#"$TARGET"/}：$MOD_FILE 只服务本地安装，工坊版用 $WORKSHOP_DESCRIPTOR")
+    else
+        FAILS+=("build 里混入了 .mod 文件：${m#"$TARGET"/}（只允许 $WORKSHOP_DESCRIPTOR）")
+    fi
+done < <(find "$TARGET" -name '*.mod' -print 2>/dev/null | LC_ALL=C sort)
 
 # 不能有漏网的排除项
 while IFS= read -r rel; do
@@ -335,6 +365,33 @@ if [ ${#FAILS[@]} -gt 0 ]; then
     printf '构建后校验失败：\n' >&2
     for f in "${FAILS[@]}"; do printf '  - %s\n' "$f" >&2; done
     exit 4
+fi
+
+# ---------------------------------------------------------------- 本地安装描述文件
+# 工坊内容只认 contentfolder 里的 descriptor.mod；<id>.mod 是本地安装的配套文件
+# （Documents/.../Stellaris/mod/<id>.mod 与 <id>/ 并排），只能写在 contentfolder 之外。
+# 默认不生成；--local-mod 时从 descriptor.mod 派生一份、补上相对的 path=，
+# 顺手去掉启动器会补的 remote_file_id=，省得两份描述文件的版本号各写一遍还对不上。
+LOCAL_MOD_OUT="$(dirname -- "$TARGET")/$MOD_FILE"
+LOCAL_MOD_WRITTEN=0
+if [ "$LOCAL_MOD" -eq 1 ]; then
+    awk -v modpath="path=\"mod/$MOD_ID\"" '
+        /^[ \t]*(path|remote_file_id)[ \t]*=/ { next }
+        { sub(/\r$/, ""); line[++n] = $0 }
+        END {
+            while (n > 0 && line[n] ~ /^[ \t]*$/) n--
+            for (i = 1; i <= n; i++) print line[i]
+            print modpath
+        }
+    ' "$DESC" > "$LOCAL_MOD_OUT"
+    LOCAL_MOD_WRITTEN=1
+
+    if ! grep -qE "^path=\"mod/$MOD_ID\"$" "$LOCAL_MOD_OUT"; then
+        die 4 "本地安装描述文件缺少 path=\"mod/$MOD_ID\"（本地安装靠它找到 mod 目录）"
+    fi
+    if grep -qiE '^[[:space:]]*remote_file_id[[:space:]]*=' "$LOCAL_MOD_OUT"; then
+        die 4 '本地安装描述文件带有 remote_file_id=（那是启动器给订阅副本补的字段）'
+    fi
 fi
 
 # ---------------------------------------------------------------- 创意工坊 VDF
@@ -508,6 +565,8 @@ printf '游戏版本  ：%s\n' "${SUPV:-（未声明）}"
 [ -n "${PIC_DIMS:-}" ] && printf '预览图    ：%s（%s）\n' "$PIC" "$PIC_DIMS"
 printf '源目录    ：%s\n' "$SRC"
 printf '输出目录  ：%s\n' "$TARGET"
+printf '描述文件  ：%s（工坊版，contentfolder 里唯一允许的 .mod）\n' "$WORKSHOP_DESCRIPTOR"
+[ "$LOCAL_MOD_WRITTEN" -eq 1 ] && printf '本地安装版：%s（contentfolder 之外，不会上传）\n' "$LOCAL_MOD_OUT"
 printf '文件数    ：%s\n' "$ACTUAL_COUNT"
 printf '大小      ：%s\n' "$SIZE_HUMAN"
 

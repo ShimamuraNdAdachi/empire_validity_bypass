@@ -1,5 +1,15 @@
 # 变更记录
 
+## 未发布
+
+- `tools/build.*`：把「工坊内容里的描述文件只能是 `descriptor.mod`」从注释变成硬校验——
+  源 mod 目录里多出 `<id>.mod` 直接失败（退出码 2）；contentfolder 里出现 `<id>.mod`、
+  或 `descriptor.mod` 与源码不是逐字节一致，也判构建失败（退出码 4）。
+- 新增 `--local-mod`：在 contentfolder 之外（`build/<id>.mod`）由 `descriptor.mod` 派生一份
+  本地安装描述文件，补 `path="mod/<id>"`、去掉启动器补的 `remote_file_id=`；默认不生成，
+  工坊上传内容不受影响。
+- README 补充描述文件命名规则与 `--local-mod` 用法。
+
 ## 1.2.2
 
 - 修复「订阅后启动器显示不兼容、进游戏校验码仍是原版 9776、mod 不生效」：

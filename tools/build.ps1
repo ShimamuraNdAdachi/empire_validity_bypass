@@ -4,11 +4,15 @@
     提取创意工坊上传集合到 build\，并渲染 steamcmd 用的 workshop_build_item.vdf。
 
 .DESCRIPTION
+    0. 描述文件命名：工坊版只用 <modid>\descriptor.mod（不含 path=），构建后与源码逐字节核对；
+       仓库根的 <modid>.mod（含 path=）只服务本地安装，永远不进 contentfolder
     1. 校验源码：descriptor.mod 字段、path= 字段、预览图、版本号同步
     2. 清空 build\<modid>\ 后重建，只复制需要上传的文件
     3. 剔除 VCS / 开发脚本 / 构建产物 / 系统垃圾 / 美术源文件
     4. 渲染 build\workshop_build_item.vdf（转义引号，换行写真实换行）
-    5. 构建后校验文件清单，并把 VDF 按 KeyValues 读回来逐字比对 description
+    5. 构建后校验文件清单（descriptor.mod 逐字节一致、contentfolder 里没有 <modid>.mod），
+       并把 VDF 按 KeyValues 读回来逐字比对 description
+    6. --local-mod 时另在 contentfolder 之外写 build\<modid>.mod（本地安装用，不会上传）
 
     用法（一般通过 tools\build.bat 调用，参数原样转发）：
         tools\build.bat [-o DIR] [-n] [--no-vdf] [--workshop-id ID] [-h]
@@ -23,13 +27,16 @@
 $ErrorActionPreference = 'Stop'
 
 $ModId = 'empire_validity_bypass'
-$ModFile = $ModId + '.mod'
+$ModFile = $ModId + '.mod'                # 本地安装：仓库根 / 用户数据目录里的 <id>.mod（含 path=）
+$WorkshopDescriptor = 'descriptor.mod'    # 工坊上传：contentfolder 根部只认这个文件名
 $ScriptRel = 'common/governments/civics/zzz_empire_validity_bypass_origins.txt'
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Src = Join-Path $RepoRoot $ModId
 
 $Warnings = New-Object System.Collections.Generic.List[string]
+$LocalModPath = $null
+$LocalModWritten = $false
 
 function Warn([string]$Message) { $script:Warnings.Add($Message) }
 
@@ -40,16 +47,22 @@ function Fail([int]$Code, [string]$Message) {
 
 function Show-Usage {
     $text = @'
-用法: tools\build.bat [-o DIR] [-n] [--no-vdf] [--workshop-id ID] [-h]
+用法: tools\build.bat [-o DIR] [-n] [--no-vdf] [--workshop-id ID] [--local-mod] [-h]
 
   把本 mod 需要上传到 Steam 创意工坊的文件提取到 build\empire_validity_bypass\，
   并在 build\workshop_build_item.vdf 渲染出 steamcmd 上传用的 VDF。
-  .git、tools\、dist\、README.md、根目录 .mod、系统垃圾等一律不进 build。
+  .git、tools\、dist\、README.md、根目录 <modid>.mod、系统垃圾等一律不进 build。
+
+  描述文件：工坊内容里只认 empire_validity_bypass\descriptor.mod（不含 path=），
+  构建后会与源码逐字节核对；仓库根的 empire_validity_bypass.mod 只为本地安装存在，
+  它一旦出现在 contentfolder 里就判构建失败。
 
   -o, --out DIR      构建输出根目录，默认 <仓库>\build
   -n, --dry-run      演练：产物写到临时目录，列出清单后删除，不动 build\
       --no-vdf       只做内容构建，不渲染 workshop_build_item.vdf
       --workshop-id  物品 ID，覆盖 tools\workshop\publishedfileid.txt
+      --local-mod    额外在 contentfolder 之外写 build\<modid>.mod（本地安装用，
+                     由 descriptor.mod 派生并补 path="mod/<modid>"，不会上传）
   -h, --help         显示本帮助
 
 VDF 配置来自 tools\workshop\publish.json（appId / title / visibility /
@@ -65,6 +78,7 @@ descriptionFile / previewFile），缺失时用内置默认值；
 $OutArg = $null
 $DryRun = $false
 $WantVdf = $true
+$WriteLocalMod = $false
 $WorkshopIdArg = $null
 
 $i = 0
@@ -79,6 +93,7 @@ while ($i -lt $args.Count) {
     elseif ($a -like '--out=*') { $OutArg = $a.Substring(6); $i++ }
     elseif ($a -eq '-n' -or $a -eq '--dry-run') { $DryRun = $true; $i++ }
     elseif ($a -eq '--no-vdf') { $WantVdf = $false; $i++ }
+    elseif ($a -eq '--local-mod') { $WriteLocalMod = $true; $i++ }
     elseif ($a -eq '--workshop-id') {
         $i++
         if ($i -ge $args.Count) { Fail 3 "$a 需要一个物品 ID" }
@@ -157,8 +172,18 @@ function Get-DescValue([string]$Path, [string]$Key) {
     return [regex]::Match($line.Line, '"([^"]*)"').Groups[1].Value
 }
 
-$Desc = Join-Path $Src 'descriptor.mod'
-if (-not (Test-Path -LiteralPath $Desc)) { Fail 2 "缺少描述文件：$Desc" }
+# 工坊版只用 contentfolder 里的 descriptor.mod；<id>.mod 是本地安装的配套描述文件
+# （Documents\...\Stellaris\mod\<id>.mod），混进工坊内容会让订阅端多出第二份描述文件。
+$Desc = Join-Path $Src $WorkshopDescriptor
+if (-not (Test-Path -LiteralPath $Desc)) { Fail 2 "缺少描述文件：$Desc（工坊版只用 $WorkshopDescriptor）" }
+
+$StrayMods = @(Get-ChildItem -LiteralPath $Src -Recurse -File -Force -Filter '*.mod' |
+               Where-Object { $_.Name -ne $WorkshopDescriptor })
+if ($StrayMods.Count -gt 0) {
+    $strayNames = ($StrayMods | ForEach-Object { $_.FullName.Substring($SrcFull.Length).TrimStart('\', '/') }) -join ', '
+    Fail 2 ("mod 目录里只能有 $WorkshopDescriptor 一个 .mod（多出：$strayNames）：" +
+            "工坊版用 $WorkshopDescriptor；$ModFile 只服务本地安装，放在仓库根，不进 build")
+}
 
 $Version = Get-DescValue $Desc 'version'
 $ModName = Get-DescValue $Desc 'name'
@@ -295,16 +320,33 @@ foreach ($f in $Keep) {
 # ---------------------------------------------------------------- 构建后校验
 $Fails = New-Object System.Collections.Generic.List[string]
 
-if (-not (Test-Path -LiteralPath (Join-Path $Target 'descriptor.mod'))) { $Fails.Add('descriptor.mod 没有进 build') }
+$BuildDesc = Join-Path $Target $WorkshopDescriptor
+if (-not (Test-Path -LiteralPath $BuildDesc)) {
+    $Fails.Add("$WorkshopDescriptor 没有进 build（工坊版只会用这一个描述文件）")
+} else {
+    # 与源码逐字节一致：手改过 build\ 里的副本、或复制时换了编码/换行都要当场发现
+    $srcDescBytes = [System.IO.File]::ReadAllBytes($Desc)
+    $dstDescBytes = [System.IO.File]::ReadAllBytes($BuildDesc)
+    if ([System.Convert]::ToBase64String($srcDescBytes) -ne [System.Convert]::ToBase64String($dstDescBytes)) {
+        $Fails.Add("build 里的 $WorkshopDescriptor 与源码不一致（被改过？重跑构建）")
+    }
+    if (Select-String -LiteralPath $BuildDesc -Pattern '^\s*path\s*=' -Quiet) {
+        $Fails.Add("build 里的 $WorkshopDescriptor 含 path= 字段（那是本地安装 <id>.mod 才有的）")
+    }
+}
+
 if (-not (Test-Path -LiteralPath (Join-Path $Target $ScriptRel))) { $Fails.Add("缺少 $ScriptRel") }
 if ($Picture -and -not (Test-Path -LiteralPath (Join-Path $Target $Picture))) { $Fails.Add("缺少预览图 $Picture") }
 
-if (Select-String -LiteralPath (Join-Path $Target 'descriptor.mod') -Pattern '^\s*path\s*=' -Quiet) {
-    $Fails.Add('build 里的 descriptor.mod 含 path= 字段')
-}
-
-foreach ($m in @(Get-ChildItem -LiteralPath $Target -Filter '*.mod' -File -Force)) {
-    if ($m.Name -ne 'descriptor.mod') { $Fails.Add("build 里混入了 .mod 文件：$($m.Name)") }
+# contentfolder 里只允许 descriptor.mod 一个 .mod；<id>.mod 只给本地安装用
+foreach ($m in @(Get-ChildItem -LiteralPath $Target -Recurse -File -Force -Filter '*.mod')) {
+    if ($m.Name -eq $WorkshopDescriptor) { continue }
+    $relMod = $m.FullName.Substring($Target.Length).TrimStart('\', '/')
+    if ($m.Name -eq $ModFile) {
+        $Fails.Add("contentfolder 里出现了 $relMod：$ModFile 只服务本地安装，工坊版用 $WorkshopDescriptor")
+    } else {
+        $Fails.Add("build 里混入了 .mod 文件：$relMod（只允许 $WorkshopDescriptor）")
+    }
 }
 
 foreach ($entry in @(Get-ChildItem -LiteralPath $Target -Recurse -Force)) {
@@ -324,6 +366,42 @@ if ($Fails.Count -gt 0) {
     Write-Host '构建后校验失败：' -ForegroundColor Red
     foreach ($f in $Fails) { Write-Host ('  - ' + $f) }
     exit 4
+}
+
+# ---------------------------------------------------------------- 本地安装描述文件
+# 工坊内容只认 contentfolder 里的 descriptor.mod；<id>.mod 是本地安装的配套文件
+# （Documents\...\Stellaris\mod\<id>.mod 与 <id>\ 并排），所以它只能写在 contentfolder 之外。
+# 默认不生成；--local-mod 时从 descriptor.mod 派生一份、补上相对的 path=，
+# 顺手把启动器会补的 remote_file_id= 去掉，省得两份描述文件的版本号各写一遍还对不上。
+$LocalModPath = Join-Path (Split-Path -Parent $Target) $ModFile
+if ($WriteLocalMod) {
+    $localLines = New-Object System.Collections.Generic.List[string]
+    foreach ($line in [System.IO.File]::ReadAllLines($Desc, (New-Object System.Text.UTF8Encoding($false)))) {
+        $t = $line.TrimEnd()
+        if ($t -match '^\s*(path|remote_file_id)\s*=') { continue }
+        $localLines.Add($t)
+    }
+    while ($localLines.Count -gt 0 -and $localLines[$localLines.Count - 1] -eq '') {
+        $localLines.RemoveAt($localLines.Count - 1)
+    }
+    $localLines.Add('path="mod/' + $ModId + '"')
+    $localText = ($localLines -join "`n") + "`n"
+    [System.IO.File]::WriteAllText($LocalModPath, $localText, (New-Object System.Text.UTF8Encoding($false)))
+    $LocalModWritten = $true
+
+    $localFails = New-Object System.Collections.Generic.List[string]
+    $localBack = [System.IO.File]::ReadAllText($LocalModPath, (New-Object System.Text.UTF8Encoding($false)))
+    if ($localBack -notmatch ('(?m)^path="mod/' + [regex]::Escape($ModId) + '"$')) {
+        $localFails.Add('缺少 path="mod/' + $ModId + '"（本地安装靠它找到 mod 目录）')
+    }
+    if ($localBack -match '(?m)^\s*remote_file_id\s*=') {
+        $localFails.Add('带有 remote_file_id=（那是启动器给订阅副本补的字段）')
+    }
+    if ($localFails.Count -gt 0) {
+        Write-Host '本地安装描述文件校验失败：' -ForegroundColor Red
+        foreach ($f in $localFails) { Write-Host ('  - ' + $f) }
+        exit 4
+    }
 }
 
 # ---------------------------------------------------------------- 创意工坊 VDF
@@ -587,6 +665,10 @@ Write-Host ('游戏版本  ：' + $(if ($SupportedVersion) { $SupportedVersion }
 if ($PictureDims) { Write-Host ('预览图    ：{0}（{1}）' -f $Picture, $PictureDims) }
 Write-Host ('源目录    ：' + $SrcFull)
 Write-Host ('输出目录  ：' + $Target)
+Write-Host ('描述文件  ：' + $WorkshopDescriptor + '（工坊版，contentfolder 里唯一允许的 .mod）')
+if ($LocalModWritten) {
+    Write-Host ('本地安装版：' + $LocalModPath + '（contentfolder 之外，不会上传）')
+}
 Write-Host ('文件数    ：' + $ActualCount)
 Write-Host ('大小      ：' + $sizeHuman)
 
@@ -638,6 +720,9 @@ if ($DryRun -and (Test-Path -LiteralPath $Target)) {
 }
 if ($DryRun -and $VdfWritten -and (Test-Path -LiteralPath $VdfPath)) {
     Remove-Item -LiteralPath $VdfPath -Force
+}
+if ($DryRun -and $LocalModWritten -and (Test-Path -LiteralPath $LocalModPath)) {
+    Remove-Item -LiteralPath $LocalModPath -Force
 }
 
 exit 0
