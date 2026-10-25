@@ -109,10 +109,11 @@ stellaris/                                   # 等价于游戏目录下的 Stell
    `dist/`、根目录 `empire_validity_bypass.mod`、`Thumbs.db` / `*.swp` / `*.log` /
    `*.psd` 之类一律不进去。构建完会打印文件清单、大小，并做校验（缺文件、
    `descriptor.mod` 里混进 `path=`、有被排除的文件残留都会直接报错退出）。
+   同时会在 `build/workshop_build_item.vdf` 渲染好 steamcmd 上传参数。
 
    常用参数：`-h` 看帮助，`-n` 只演练（产物写临时目录、不碰 `build/`），
-   `-o DIR` 换输出根目录。`-o` 指向源码目录或仓库根的上级会被拒绝——脚本要清空
-   目标目录，护栏是必须的。
+   `-o DIR` 换输出根目录，`--no-vdf` 跳过 VDF，`--workshop-id ID` 临时指定物品 ID。
+   `-o` 指向源码目录或仓库根的上级会被拒绝——脚本要清空目标目录，护栏是必须的。
 
 1. 完全退出游戏（启动器保持运行）。
 2. 启动器 → `Mods` → 选中本地安装的 **虚境锻造：游牧兼容** → `Upload Mod`。
@@ -121,6 +122,31 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 
 上传时把 `build/empire_validity_bypass/` 当作内容目录（steamcmd 的 `contentfolder`）；
 用启动器上传的话，确认本地安装的那份与 `build/` 内容一致即可。
+
+### 用 steamcmd 发布（可选，可脚本化）
+
+`build` 脚本顺手会渲染 `build/workshop_build_item.vdf`（和内容目录同级，不会被上传）：
+
+| 字段 | 来源 |
+| --- | --- |
+| `appid` | `publish.json` 的 `appId`，缺省 281990 |
+| `contentfolder` / `previewfile` | 绝对路径，指向 `build/empire_validity_bypass/` 与其中的预览图 |
+| `title` | `publish.json` 的 `title`，为空时用 `descriptor.mod` 的 `name` |
+| `description` | `tools/workshop/description.bbcode`；`{{VERSION}}` / `{{SUPPORTED_VERSION}}` 会被替换，换行转义成 `\n` |
+| `changenote` | `CHANGELOG.md` 里 `## <版本>` 那一节的条目（`publish.json` 有 `changenote` 就用它） |
+| `visibility` | `publish.json` 的 `public` / `friends` / `private` / `unlisted` → `0` / `1` / `2` / `3` |
+| `publishedfileid` | `tools/workshop/publishedfileid.txt`（纯数字），没有就是 `0` = 首次上传 |
+
+```bash
+steamcmd +login <账号> +workshop_build_item "<仓库>/build/workshop_build_item.vdf" +quit
+```
+
+首次上传后 steamcmd 会打印物品 ID，把它写进 `tools/workshop/publishedfileid.txt`，
+之后每次更新都指向同一个物品（不写就会**每次新建一个重复物品**）。临时改一次用
+`--workshop-id <ID>`；不想生成 VDF 就加 `--no-vdf`。
+
+steamcmd 这条路径不吃 `descriptor.mod` 里的 `tags`，第一次上传后到物品页手动勾一次即可。
+`build/` 和 `*.vdf` 都在 `.gitignore` 里，VDF 不会被提交。
 
 上传之后：
 
@@ -139,7 +165,7 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 | --- | --- |
 | `tools/install.ps1` | 本地安装：复制到用户数据目录、旧副本改名备份、`-Enable` 写 `dlc_load.json`、`-GameDataPath` 指定非默认目录 |
 | `tools/package.ps1` | 打包 `dist/empire_validity_bypass-v<版本>.zip`（非工坊分发用），校验包内清单并输出 SHA256 |
-| `tools/build.bat` | 提取创意工坊上传集合到 `build\empire_validity_bypass\`：清空重建、剔除无关文件、校验后打印清单（cmd，不依赖 PowerShell） |
+| `tools/build.bat` | 提取创意工坊上传集合到 `build\empire_validity_bypass\`，并渲染 `build\workshop_build_item.vdf`：清空重建、剔除无关文件、转义 VDF、校验后打印清单（cmd，不依赖 PowerShell） |
 | `tools/build.sh` | 同上，Linux / macOS / Git Bash 用；规则与 `build.bat` 一致，产物逐字节相同 |
 | `tools/common.ps1` | 路径探测（Steam 库 / Paradox 用户数据目录）等公共函数 |
 

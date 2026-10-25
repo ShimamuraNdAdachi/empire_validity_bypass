@@ -4,6 +4,7 @@
 # ------------------------------------------------------------
 # 源：empire_validity_bypass/          （mod 本体，即工坊上传内容）
 # 出：build/empire_validity_bypass/    （只含需要上传的文件）
+#     build/workshop_build_item.vdf    （steamcmd 上传参数，转义好的）
 #
 # 被排除、不进 build/ 的东西：
 #   .git/ .github/ .vscode/ .idea/ ...           VCS 与编辑器
@@ -13,9 +14,13 @@
 #   *.psd *.xcf *.zip *.7z ...                   美术源文件与压缩包
 #   empire_validity_bypass.mod                   含 path= 的本地描述文件
 #
+# VDF 的 title/description/changenote/visibility/appId 来自
+# tools/workshop/publish.json 与 CHANGELOG.md；物品 ID 取自
+# tools/workshop/publishedfileid.txt（首次为 0）。
+#
 # 规则与 tools/build.bat 完全一致，两个脚本产出同一套文件。
 #
-# 用法：tools/build.sh [-o DIR] [-n] [-h]
+# 用法：tools/build.sh [-o DIR] [-n] [--no-vdf] [--workshop-id ID] [-h]
 # 退出码：0 成功 / 2 源不合规 / 3 参数或路径不安全 / 4 构建后校验失败
 # ============================================================
 
@@ -34,21 +39,28 @@ WARNINGS=()
 
 usage() {
     cat <<'EOF'
-用法: tools/build.sh [-o DIR] [-n] [-h]
+用法: tools/build.sh [-o DIR] [-n] [--no-vdf] [--workshop-id ID] [-h]
 
-把本 mod 需要上传到 Steam 创意工坊的文件提取到 build/empire_validity_bypass/。
+把本 mod 需要上传到 Steam 创意工坊的文件提取到 build/empire_validity_bypass/，
+并在 build/workshop_build_item.vdf 渲染出 steamcmd 上传用的 VDF（含转义后的
+描述、changenote、绝对路径）。
 .git、tools/、dist/、README.md、根目录 .mod、系统垃圾等一律不进 build。
 
 选项:
-  -o, --out DIR   构建输出根目录，默认 <仓库>/build
-  -n, --dry-run   演练：产物写到临时目录，列出清单后删除，不动 build/
-  -h, --help      显示本帮助
+  -o, --out DIR       构建输出根目录，默认 <仓库>/build
+  -n, --dry-run       演练：产物写到临时目录，列出清单后删除，不动 build/
+      --no-vdf        只做内容构建，不渲染 workshop_build_item.vdf
+      --workshop-id   物品 ID，覆盖 tools/workshop/publishedfileid.txt
+  -h, --help          显示本帮助
+
+VDF 配置来自 tools/workshop/publish.json（appId / title / visibility /
+descriptionFile / previewFile），缺失时用内置默认值。
 
 退出码:
   0  成功
   2  源文件缺失或描述文件字段不合规
   3  参数错误，或输出路径不安全（会覆盖源码）
-  4  构建后校验失败
+  4  构建后校验失败（含 VDF 校验）
 EOF
 }
 
@@ -122,6 +134,8 @@ png_size() {
 # ---------------------------------------------------------------- 参数
 OUT_ARG=''
 DRY_RUN=0
+WANT_VDF=1
+WORKSHOP_ID_ARG=''
 while [ $# -gt 0 ]; do
     case $1 in
         -o|--out)
@@ -131,6 +145,13 @@ while [ $# -gt 0 ]; do
             OUT_ARG=${1#*=}; shift ;;
         -n|--dry-run)
             DRY_RUN=1; shift ;;
+        --no-vdf)
+            WANT_VDF=0; shift ;;
+        --workshop-id)
+            [ $# -ge 2 ] || die 3 "$1 需要一个 ID"
+            WORKSHOP_ID_ARG=$2; shift 2 ;;
+        --workshop-id=*)
+            WORKSHOP_ID_ARG=${1#*=}; shift ;;
         -h|--help)
             usage; exit 0 ;;
         --)
@@ -307,6 +328,125 @@ if [ ${#FAILS[@]} -gt 0 ]; then
     exit 4
 fi
 
+# ---------------------------------------------------------------- 创意工坊 VDF
+# steamcmd 的上传参数只能写在 VDF 里（appid / contentfolder / previewfile /
+# title / description / changenote / visibility），所以这里直接渲染一份出来。
+# publish.json 是扁平键值，下面只做最小提取，不是通用 JSON 解析。
+json_get() {
+    local raw
+    [ -f "$1" ] || return 0
+    raw=$(grep -m 1 "\"$2\"" "$1" 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//') || return 0
+    [ -n "$raw" ] || return 0
+    raw=${raw%,}
+    raw=$(printf '%s' "$raw" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    case $raw in
+        \"*\") raw=${raw#\"}; raw=${raw%\"} ;;
+    esac
+    printf '%s' "$raw"
+}
+
+# 把每行转义（\ → \\， " → \"），换行由调用方决定
+vdf_escape_lines() {
+    sed -e 's/\r$//' -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+# 把多行接成一行，行之间写字面量 \n（VDF 里的换行写法）
+vdf_join_lines() {
+    awk 'BEGIN { ORS = "" } NR > 1 { printf "\\n" } { printf "%s", $0 }'
+}
+# 占位符替换 → 转义 → 接行
+vdf_escape_file() {
+    sed -e "s|{{SUPPORTED_VERSION}}|$SUPV|g" -e "s|{{VERSION}}|$VER|g" "$1" \
+        | vdf_escape_lines | vdf_join_lines
+}
+
+VDF_OUT="$(dirname -- "$TARGET")/workshop_build_item.vdf"
+VDF_WRITTEN=0
+if [ "$WANT_VDF" -eq 0 ]; then
+    :
+else
+    PUB_JSON="$REPO_ROOT/tools/workshop/publish.json"
+
+    APP_ID=$(json_get "$PUB_JSON" appId)
+    [ -n "$APP_ID" ] || APP_ID=281990
+
+    case $(json_get "$PUB_JSON" visibility) in
+        0|public)   VIS=0 ;;
+        1|friends)  VIS=1 ;;
+        2|private)  VIS=2 ;;
+        *)          VIS=3 ;;   # 默认 unlisted，自测阶段最稳
+    esac
+
+    TITLE=$(json_get "$PUB_JSON" title)
+    [ -n "$TITLE" ] || TITLE=$MOD_NAME
+
+    PREVIEW_REL=$(json_get "$PUB_JSON" previewFile)
+    [ -n "$PREVIEW_REL" ] || PREVIEW_REL=$PIC
+
+    DESC_FILE=$(json_get "$PUB_JSON" descriptionFile)
+    [ -n "$DESC_FILE" ] || DESC_FILE=tools/workshop/description.bbcode
+    case $DESC_FILE in
+        /*) : ;;
+        *)  DESC_FILE="$REPO_ROOT/$DESC_FILE" ;;
+    esac
+    [ -f "$DESC_FILE" ] || die 2 "找不到工坊简介文件：$DESC_FILE"
+
+    # 物品 ID：命令行 > tools/workshop/publishedfileid.txt > 0（首次上传）
+    PUB_ID=$WORKSHOP_ID_ARG
+    if [ -z "$PUB_ID" ] && [ -f "$REPO_ROOT/tools/workshop/publishedfileid.txt" ]; then
+        PUB_ID=$(tr -dc '0-9' < "$REPO_ROOT/tools/workshop/publishedfileid.txt")
+    fi
+    [ -n "$PUB_ID" ] || PUB_ID=0
+
+    TITLE_ESC=$(printf '%s' "$TITLE" | vdf_escape_lines | vdf_join_lines)
+    DESC_ESC=$(vdf_escape_file "$DESC_FILE")
+
+    CFG_NOTE=$(json_get "$PUB_JSON" changenote)
+    if [ -n "$CFG_NOTE" ]; then
+        NOTE_ESC=$(printf '%s' "$CFG_NOTE" | vdf_escape_lines | vdf_join_lines)
+    else
+        # 从 CHANGELOG 取当前版本那一节的项目符号
+        NOTE_ESC=$(awk -v want="$VER" '
+            /^## / {
+                if (found) exit
+                if (index($0, "## " want) == 1) found = 1
+                next
+            }
+            found && /^- / { print substr($0, 3) }
+        ' "$REPO_ROOT/CHANGELOG.md" | vdf_escape_lines | vdf_join_lines)
+        [ -n "$NOTE_ESC" ] || warn "CHANGELOG 里没有 $VER 的条目，changenote 为空"
+    fi
+
+    CONTENT_ESC=$(printf '%s' "$TARGET" | vdf_escape_lines)
+    PREVIEW_ESC=$(printf '%s' "$TARGET/$PREVIEW_REL" | vdf_escape_lines)
+
+    {
+        printf '"workshopitem"\n{\n'
+        printf '\t"appid"\t\t"%s"\n' "$APP_ID"
+        printf '\t"publishedfileid"\t\t"%s"\n' "$PUB_ID"
+        printf '\t"contentfolder"\t\t"%s"\n' "$CONTENT_ESC"
+        printf '\t"previewfile"\t\t"%s"\n' "$PREVIEW_ESC"
+        printf '\t"title"\t\t"%s"\n' "$TITLE_ESC"
+        printf '\t"description"\t\t"%s"\n' "$DESC_ESC"
+        printf '\t"changenote"\t\t"%s"\n' "$NOTE_ESC"
+        printf '\t"visibility"\t\t"%s"\n' "$VIS"
+        printf '}\n'
+    } > "$VDF_OUT"
+    VDF_WRITTEN=1
+
+    # 校验：行数必须是 11（描述里有裸换行就会变多），未转义的引号必须是 34 个
+    VDF_LINES=$(wc -l < "$VDF_OUT" | tr -d ' ')
+    if [ "$VDF_LINES" != '11' ]; then
+        die 4 "VDF 行数异常（$VDF_LINES，应为 11）：有一次换行没转义成 \\n"
+    fi
+    Q_TOTAL=$(grep -oF '"' "$VDF_OUT" 2>/dev/null | wc -l | tr -d ' ' || true)
+    Q_ESC=$(grep -oF '\"' "$VDF_OUT" 2>/dev/null | wc -l | tr -d ' ' || true)
+    if [ $((Q_TOTAL - Q_ESC)) -ne 34 ]; then
+        die 4 "VDF 引号未配对（未转义引号 $((Q_TOTAL - Q_ESC)) 个，应为 34）"
+    fi
+    head -n 1 "$VDF_OUT" | grep -q '^"workshopitem"$' ||
+        die 4 'VDF 第一行不是 "workshopitem"'
+fi
+
 # ---------------------------------------------------------------- 报告
 SIZE_KB=$(du -sk "$TARGET" | awk '{print $1}')
 SIZE_HUMAN=$(awk -v k="$SIZE_KB" 'BEGIN { if (k >= 1024) printf "%.1f MB", k / 1024; else printf "%d KB", k }')
@@ -363,3 +503,14 @@ else
     printf '\n上传根目录（contentfolder）：%s\n' "$TARGET"
     printf '启动器：Mods → 选中本 mod → Upload Mod；或把上面的目录当作 steamcmd 的 contentfolder。\n'
 fi
+
+if [ "$VDF_WRITTEN" -eq 1 ]; then
+    printf '创意工坊 VDF：%s\n' "$VDF_OUT"
+    printf '  物品 ID %s / visibility %s / 描述来自 %s\n' \
+        "$PUB_ID" "$VIS" "${DESC_FILE#"$REPO_ROOT"/}"
+    if [ "$PUB_ID" = '0' ]; then
+        printf '  首次上传（publishedfileid=0）；上传成功后把物品 ID 写进 tools/workshop/publishedfileid.txt。\n'
+    fi
+    printf 'steamcmd +login <账号> +workshop_build_item "%s" +quit\n' "$VDF_OUT"
+fi
+

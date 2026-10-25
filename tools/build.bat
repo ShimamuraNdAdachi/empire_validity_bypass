@@ -29,6 +29,8 @@ set "SCRIPT_REL=common\governments\civics\zzz_empire_validity_bypass_origins.txt
 set "JUNK_FILES=Thumbs.db desktop.ini *.swp *.swo *~ *.bak *.tmp *.log *.orig *.rej *.pyc *.zip *.7z *.rar *.psd *.xcf"
 set "WARN="
 set "PIC_DIMS="
+set "WANT_VDF=1"
+set "WS_ID_ARG="
 
 for %%I in ("%~dp0..") do set "REPO_ROOT=%%~fI"
 set "SRC=%REPO_ROOT%\%MOD_ID%"
@@ -42,11 +44,24 @@ if /i "%~1"=="-h" goto usage
 if /i "%~1"=="--help" goto usage
 if /i "%~1"=="-n" set "DRY_RUN=1" & shift & goto parse
 if /i "%~1"=="--dry-run" set "DRY_RUN=1" & shift & goto parse
+if /i "%~1"=="--no-vdf" set "WANT_VDF=0" & shift & goto parse
 if /i "%~1"=="-o" goto arg_out
 if /i "%~1"=="--out" goto arg_out
+if /i "%~1"=="--workshop-id" goto arg_wsid
+set "_a=%~1"
+if /i "!_a:~0,14!"=="--workshop-id=" set "WS_ID_ARG=!_a:~14!" & shift & goto parse
 echo 错误：未知参数 %~1
 echo 用 tools\build.bat -h 查看用法。
 set "EC=3" & goto finish
+
+:arg_wsid
+if "%~2"=="" (
+    echo 错误：%~1 需要一个物品 ID
+    set "EC=3" & goto finish
+)
+set "WS_ID_ARG=%~2"
+shift & shift
+goto parse
 
 :arg_out
 if "%~2"=="" (
@@ -190,6 +205,107 @@ for /f "delims=" %%F in ('dir /b /s /a-d "%TARGET%\*" 2^>nul') do (
 )
 if "%COUNT%"=="0" goto err_post_empty
 
+rem ---------------------------------------------------------- 创意工坊 VDF
+rem steamcmd 的上传参数只能写在 VDF 里（appid / contentfolder / previewfile /
+rem title / description / changenote / visibility），这里直接渲染一份出来。
+rem publish.json 只做最小的扁平键值提取，不是通用 JSON 解析。
+if "%WANT_VDF%"=="0" goto after_vdf
+
+set "VDF_WRITTEN=0"
+set "PUB_JSON=%REPO_ROOT%\tools\workshop\publish.json"
+for %%I in ("%TARGET%\..") do set "VDF_DIR=%%~fI"
+set "VDF_OUT=%VDF_DIR%\workshop_build_item.vdf"
+
+call :json_get "%PUB_JSON%" appId
+set "APP_ID=%JSON_V%"
+if not defined APP_ID set "APP_ID=281990"
+
+call :json_get "%PUB_JSON%" visibility
+set "VIS=3"
+if /i "%JSON_V%"=="0" set "VIS=0"
+if /i "%JSON_V%"=="public" set "VIS=0"
+if /i "%JSON_V%"=="1" set "VIS=1"
+if /i "%JSON_V%"=="friends" set "VIS=1"
+if /i "%JSON_V%"=="2" set "VIS=2"
+if /i "%JSON_V%"=="private" set "VIS=2"
+
+call :json_get "%PUB_JSON%" title
+set "TITLE_V=%JSON_V%"
+if not defined TITLE_V set "TITLE_V=%MOD_NAME%"
+call :escape_var TITLE_V
+
+call :json_get "%PUB_JSON%" previewFile
+set "PREVIEW_REL=%JSON_V%"
+if not defined PREVIEW_REL set "PREVIEW_REL=%PIC%"
+set "PREVIEW_REL=%PREVIEW_REL:/=\%"
+
+call :json_get "%PUB_JSON%" descriptionFile
+set "DESC_FILE=%JSON_V%"
+if not defined DESC_FILE set "DESC_FILE=tools\workshop\description.bbcode"
+set "DESC_FILE=%DESC_FILE:/=\%"
+if not "%DESC_FILE:~1,1%"==":" if not "%DESC_FILE:~0,1%"=="\" set "DESC_FILE=%REPO_ROOT%\%DESC_FILE%"
+if not exist "%DESC_FILE%" goto err_no_descfile
+
+rem cmd 单行上限 8191 字符：转义会把文本撑大，所以直接看源文件字节数
+for %%A in ("%DESC_FILE%") do set "_fsz=%%~zA"
+if defined _fsz if %_fsz% GTR 6000 goto err_vdf_long
+
+rem 物品 ID：参数 > tools\workshop\publishedfileid.txt > 0（首次上传）
+set "PUB_ID=%WS_ID_ARG%"
+if not defined PUB_ID if exist "%REPO_ROOT%\tools\workshop\publishedfileid.txt" set /p PUB_ID=<"%REPO_ROOT%\tools\workshop\publishedfileid.txt"
+set "_badid="
+if defined PUB_ID for /f "delims=0123456789" %%X in ("%PUB_ID%") do set "_badid=1"
+if defined _badid set "PUB_ID="
+if not defined PUB_ID set "PUB_ID=0"
+
+findstr /c:"!" "%DESC_FILE%" >nul 2>nul
+if not errorlevel 1 call :addwarn "简介里有 ! ，cmd 会吞掉；需要的话用 build.sh 渲染 VDF"
+
+call :vdf_value "%DESC_FILE%" 1
+set "DESC_V=%VDF_V%"
+
+call :json_get "%PUB_JSON%" changenote
+if defined JSON_V (
+    set "NOTE_V=!JSON_V!"
+    call :escape_var NOTE_V
+) else (
+    call :changenote_file
+    rem 块内必须用 !延迟展开!：%VAR% 在这块被解析时还是旧值
+    for %%A in ("!NOTE_TMP!") do set "_nsz=%%~zA"
+    if !_nsz! GTR 6000 goto err_vdf_long
+    call :vdf_value "!NOTE_TMP!" 0
+    set "NOTE_V=!VDF_V!"
+    del "!NOTE_TMP!" >nul 2>nul
+    if not defined NOTE_V call :addwarn "CHANGELOG 里没有 %VER% 的条目，changenote 为空"
+)
+
+set "CONTENT_V=%TARGET%"
+set "CONTENT_V=%CONTENT_V:\=/%"
+set "PREVIEW_V=%TARGET%\%PREVIEW_REL%"
+set "PREVIEW_V=%PREVIEW_V:\=/%"
+
+break>"%VDF_OUT%"
+>>"%VDF_OUT%" echo "workshopitem"
+>>"%VDF_OUT%" echo {
+>>"%VDF_OUT%" echo 	"appid"		"%APP_ID%"
+>>"%VDF_OUT%" echo 	"publishedfileid"		"%PUB_ID%"
+>>"%VDF_OUT%" echo 	"contentfolder"		"%CONTENT_V%"
+>>"%VDF_OUT%" echo 	"previewfile"		"%PREVIEW_V%"
+>>"%VDF_OUT%" echo 	"title"		"%TITLE_V%"
+>>"%VDF_OUT%" echo 	"description"		"%DESC_V%"
+>>"%VDF_OUT%" echo 	"changenote"		"%NOTE_V%"
+>>"%VDF_OUT%" echo 	"visibility"		"%VIS%"
+>>"%VDF_OUT%" echo }
+
+rem 校验：行数必须是 11（有裸换行就会变多）
+set "VDF_LINES="
+for /f %%A in ('find /c /v "" ^<"%VDF_OUT%"') do set "VDF_LINES=%%A"
+if not "%VDF_LINES%"=="11" goto err_vdf_lines
+findstr /b /c:"\"workshopitem\"" "%VDF_OUT%" >nul 2>nul
+if errorlevel 1 goto err_vdf_head
+set "VDF_WRITTEN=1"
+
+:after_vdf
 rem ---------------------------------------------------------- 报告
 echo.
 if "%DRY_RUN%"=="1" (
@@ -240,7 +356,15 @@ if "%DRY_RUN%"=="1" (
     echo 上传根目录（contentfolder）：%TARGET%
     echo 启动器：Mods → 选中本 mod → Upload Mod；或把上面的目录当作 steamcmd 的 contentfolder。
 )
+if "%VDF_WRITTEN%"=="1" (
+    echo.
+    echo 创意工坊 VDF：%VDF_OUT%
+    echo   物品 ID %PUB_ID% / visibility %VIS% / 简介 %DESC_FILE%
+    if "%PUB_ID%"=="0" echo   首次上传（publishedfileid=0）；上传成功后把物品 ID 写进 tools\workshop\publishedfileid.txt。
+    echo   steamcmd +login 账号 +workshop_build_item "%VDF_OUT%" +quit
+)
 if exist "%TARGET%\" if "%DRY_RUN%"=="1" rd /s /q "%TARGET%"
+if exist "%VDF_OUT%" if "%DRY_RUN%"=="1" del /f /q "%VDF_OUT%" >nul 2>nul
 set "EC=0" & goto finish
 
 rem ---------------------------------------------------------- 收尾
@@ -251,6 +375,103 @@ exit /b %EC%
 rem ---------------------------------------------------------- 子程序
 :addwarn
 set "WARN=!WARN! %~1"
+exit /b 0
+
+:escape_var
+rem %1=变量名；原地把值里的 \ 与 " 转义成 VDF 能吃的形式
+setlocal enabledelayedexpansion
+set "_v=!%~1!"
+if defined _v set "_v=!_v:\=\\!"
+if defined _v set "_v=!_v:"=\"!"
+endlocal & set "%~1=%_v%"
+exit /b 0
+
+:json_get
+rem %1=json 文件 %2=键 → JSON_V（扁平键值，找不到时为空）
+set "JSON_V="
+if not exist "%~1" exit /b 0
+for /f "usebackq tokens=1,* delims=:" %%A in (`findstr /i /c:"\"%~2\"" "%~1"`) do (
+    if not defined JSON_V (
+        set "_jraw=%%B"
+        call :json_clean
+    )
+)
+exit /b 0
+
+:json_clean
+rem 去逗号、去引号、去首尾空白，结果放 JSON_V
+setlocal enabledelayedexpansion
+set "_v=!_jraw!"
+if "!_v:~-1!"=="," set "_v=!_v:~0,-1!"
+if defined _v set "_v=!_v:"=!"
+for /f "tokens=*" %%X in ("!_v!") do set "_v=%%X"
+endlocal & set "JSON_V=%_v%"
+exit /b 0
+
+:vdf_value
+rem %1=文本文件 %2=1 时替换 {{VERSION}}/{{SUPPORTED_VERSION}} → VDF_V（单行，\n 分隔）
+set "VDF_V="
+set "_vfirst=1"
+if not exist "%~1" exit /b 0
+for /f "usebackq delims=" %%L in (`findstr /n /r "^" "%~1"`) do (
+    set "_vl=%%L"
+    call :vdf_line %~2
+)
+exit /b 0
+
+:vdf_line
+rem 处理 _vl 里的一行：去行号 → 占位符 → 转义 → 用 \n 接到 VDF_V 后面
+rem 注意：变量为空时 %var:old=new% 不替换而是原样吐出 "old=new"，所以每步都判空
+setlocal enabledelayedexpansion
+set "_t=!_vl:*:=!"
+if "%~1"=="1" (
+    if defined _t set "_t=!_t:{{VERSION}}=%VER%!"
+    if defined _t set "_t=!_t:{{SUPPORTED_VERSION}}=%SUPV%!"
+)
+if defined _t set "_t=!_t:\=\\!"
+if defined _t set "_t=!_t:"=\"!"
+if "!_vfirst!"=="1" (
+    endlocal & set "_vfirst=0" & set "VDF_V=%_t%" & exit /b 0
+)
+endlocal & set "VDF_V=%VDF_V%\n%_t%" & exit /b 0
+
+:changenote_file
+rem 把 CHANGELOG.md 里 "## %VER%" 那一节的 "- " 条目抽到 NOTE_TMP
+set "NOTE_TMP=%TEMP%\evb-note-%RANDOM%%RANDOM%.txt"
+break>"%NOTE_TMP%"
+set "_in=0"
+for /f "usebackq delims=" %%L in (`findstr /n /r "^" "%REPO_ROOT%\CHANGELOG.md"`) do (
+    set "_cl=%%L"
+    call :note_line
+)
+exit /b 0
+
+:note_line
+setlocal enabledelayedexpansion
+set "_t=!_cl:*:=!"
+if "!_in!"=="2" (
+    endlocal
+    exit /b 0
+)
+if "!_in!"=="1" (
+    if "!_t:~0,3!"=="## " (
+        endlocal
+        set "_in=2"
+        exit /b 0
+    )
+    if "!_t:~0,2!"=="- " (
+        set "_t=!_t:~2!"
+        >>"%NOTE_TMP%" echo(!_t!
+    )
+    endlocal
+    exit /b 0
+)
+if "!_t!"=="## %VER%" (
+    endlocal
+    set "_in=1"
+    exit /b 0
+)
+endlocal
 exit /b 0
 
 :echo_rel
@@ -293,14 +514,20 @@ if not "!_w!x!_v!"=="512x512" call :addwarn "预览图尺寸 !_w!x!_v!，惯例�
 exit /b 0
 
 :usage
-echo 用法: tools\build.bat [-o DIR] [-n] [-h]
+echo 用法: tools\build.bat [-o DIR] [-n] [--no-vdf] [--workshop-id ID] [-h]
 echo.
-echo   把本 mod 需要上传到 Steam 创意工坊的文件提取到 build\%MOD_ID%\。
+echo   把本 mod 需要上传到 Steam 创意工坊的文件提取到 build\%MOD_ID%\，
+echo   并在 build\workshop_build_item.vdf 渲染出 steamcmd 上传用的 VDF。
 echo   .git、tools\、dist\、README.md、根目录 .mod、系统垃圾等一律不进 build。
 echo.
-echo   -o, --out DIR   构建输出根目录，默认 ^<仓库^>\build
-echo   -n, --dry-run   演练：产物写到临时目录，列出清单后删除，不动 build\
-echo   -h, --help      显示本帮助
+echo   -o, --out DIR      构建输出根目录，默认 ^<仓库^>\build
+echo   -n, --dry-run      演练：产物写到临时目录，列出清单后删除，不动 build\
+echo       --no-vdf       只做内容构建，不渲染 workshop_build_item.vdf
+echo       --workshop-id  物品 ID，覆盖 tools\workshop\publishedfileid.txt
+echo   -h, --help         显示本帮助
+echo.
+echo VDF 配置来自 tools\workshop\publish.json（appId / title / visibility /
+echo descriptionFile / previewFile），缺失时用内置默认值。
 echo.
 echo 退出码: 0 成功 / 2 源不合规 / 3 参数或路径不安全 / 4 构建后校验失败
 set "EC=0" & goto finish
@@ -382,4 +609,21 @@ set "EC=4" & goto finish
 
 :err_post_empty
 echo 错误：构建后校验失败，build 里没有文件。
+set "EC=4" & goto finish
+
+:err_no_descfile
+echo 错误：找不到工坊简介文件：%DESC_FILE%
+set "EC=2" & goto finish
+
+:err_vdf_long
+echo 错误：简介或 changenote 超过 cmd 单行上限（约 8000 字符），VDF 渲染不了。
+echo 改用 tools/build.sh 渲染，或把简介拆短。
+set "EC=4" & goto finish
+
+:err_vdf_lines
+echo 错误：VDF 行数异常（%VDF_LINES%，应为 11）：有一次换行没转义成 \n。
+set "EC=4" & goto finish
+
+:err_vdf_head
+echo 错误：VDF 第一行不是 "workshopitem"：%VDF_OUT%
 set "EC=4" & goto finish
