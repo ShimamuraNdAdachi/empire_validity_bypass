@@ -21,3 +21,8 @@ desktop.ini
 tmp/
 *.log
 *.tmp
+
+# --- 创意工坊自动发布 -----------------------------
+steamcmd/
+dist/steam-session.b64
+*.vdf
