@@ -1,6 +1,6 @@
-# 虚境锻造：游牧兼容 — Stellaris 起源合法性兼容 mod
+# 虚境铸造：游牧兼容 — Stellaris 起源合法性兼容 mod
 
-一个只改一条规则的小 mod：让「虚境锻造（Shroud-Forged）」起源不再排除游牧，从而让
+一个只改一条规则的小 mod：让「虚境铸造（Shroud-Forged）」起源不再排除游牧，从而让
 同时带 `is_nomadic=yes` 与 `origin="origin_shroud_forged"` 的帝国设计通过起源合法性校验。
 
 - 游戏版本：**Stellaris 4.5.x**（开发与验证于 4.5.2 Cygnus）
@@ -16,7 +16,7 @@
 1. 打开发布页点「订阅」。Steam 会把内容下载到
    `<Steam>\steamapps\workshop\content\281990\<PublishedFileId>\`。
 2. 启动 Paradox 启动器 —— 它会在 `Documents\Paradox Interactive\Stellaris\mod\` 自动生成
-   `ugc_<PublishedFileId>.mod`，在播放集里勾选 **虚境锻造：游牧兼容**。
+   `ugc_<PublishedFileId>.mod`，在播放集里勾选 **虚境铸造：游牧兼容**。
 3. 启动游戏。
 
 订阅式安装不需要解压任何文件：更新由 Steam 自动完成，取消订阅即卸载。
@@ -28,7 +28,7 @@
 1. 下载本仓库（Code → Download ZIP）并解压。
 2. 把 `empire_validity_bypass` 文件夹 **和** `empire_validity_bypass.mod` 文件一起复制到
    `Documents/Paradox Interactive/Stellaris/mod/`。
-3. 在 Paradox 启动器里启用 **虚境锻造：游牧兼容**。
+3. 在 Paradox 启动器里启用 **虚境铸造：游牧兼容**。
 
 更新时先删掉旧的 `empire_validity_bypass` 文件夹再复制，避免残留旧文件。
 
@@ -116,7 +116,7 @@ stellaris/                                   # 等价于游戏目录下的 Stell
    `-o` 指向源码目录或仓库根的上级会被拒绝——脚本要清空目标目录，护栏是必须的。
 
 1. 完全退出游戏（启动器保持运行）。
-2. 启动器 → `Mods` → 选中本地安装的 **虚境锻造：游牧兼容** → `Upload Mod`。
+2. 启动器 → `Mods` → 选中本地安装的 **虚境铸造：游牧兼容** → `Upload Mod`。
 3. 登录 Paradox 账号（需与 Steam 关联），填标题、简介、版本、tags，上传。
 4. 上传完成会得到 `PublishedFileId`：把它填到本 README 顶部那行链接里，并写进 CHANGELOG。
 
@@ -174,7 +174,7 @@ steamcmd 这条路径不吃 `descriptor.mod` 里的 `tags`，第一次上传后�
 
 ## 已知限制
 
-- 只放行「游牧 + 虚境锻造」这一条组合，其它起源限制照旧生效。
+- 只放行「游牧 + 虚境铸造」这一条组合，其它起源限制照旧生效。
 - 判定在房主端执行：联机时房主也要启用本 mod，否则该设计仍可能被拒绝。
 - 游戏小版本更新后原版定义可能变化，需要重新对照 `00_origins.txt` 补齐字段。
 - 覆盖定义必须跟原版保持同步，否则会静默丢失原版新增或修改的字段。

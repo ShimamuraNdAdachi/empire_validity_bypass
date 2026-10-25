@@ -1,8 +1,8 @@
-虚境锻造：游牧兼容 (empire_validity_bypass) 1.2.0
+虚境铸造：游牧兼容 (empire_validity_bypass) 1.2.0
 =================================================
 
 只改一条规则：origin_shroud_forged 的 possible 里去掉 is_nomadic = no，
-让「游牧 + 虚境锻造」的帝国设计通过起源合法性校验。
+让「游牧 + 虚境铸造」的帝国设计通过起源合法性校验。
 
 需要 Shadows of the Shroud DLC。
 以下原版限制保留：

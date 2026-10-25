@@ -154,5 +154,5 @@ if ($Enable) {
 Write-Host ''
 Write-Host '安装完成。后续步骤：'
 Write-Host '  1) 启动游戏 →「Mods / 播放集」确认 empire_validity_bypass 已启用'
-Write-Host '  2) 帝国选择界面检查带「游牧 + 虚境锻造」的设计（如 man）可开局'
+Write-Host '  2) 帝国选择界面检查带「游牧 + 虚境铸造」的设计（如 man）可开局'
 Write-Host '  3) 联机时房主也需要启用同一份 mod，否则该设计在房主端仍可能被拒绝'
