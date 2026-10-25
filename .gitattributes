@@ -30,6 +30,9 @@
 *.md       text eol=lf
 *.ps1      text eol=crlf
 *.psm1     text eol=crlf
+*.sh       text eol=lf
+# 批处理必须 CRLF：cmd 读 LF 的 .bat 会把行拆错（报 'ath' 不是内部命令）
+*.bat      text eol=crlf
 *.json     text eol=lf
 .github/** text eol=lf
 *.bbcode   -text

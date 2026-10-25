@@ -24,3 +24,18 @@ charset = utf-8-bom
 indent_style = space
 indent_size = 4
 trim_trailing_whitespace = false
+
+[*.{sh,bat}]
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = false
+
+# shell 脚本：LF + 无 BOM（CRLF 会让 bash 报 $'\r': command not found）
+[*.sh]
+end_of_line = lf
+charset = utf-8
+
+# 批处理：必须 CRLF + 无 BOM（cmd 会把 BOM 当命令，LF 会拆错行）
+[*.bat]
+end_of_line = crlf
+charset = utf-8

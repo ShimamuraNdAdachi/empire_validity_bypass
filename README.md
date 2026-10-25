@@ -68,7 +68,11 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 ├─ tools/                                    # 开发脚本（不进游戏目录、不进工坊上传）
 │  ├─ common.ps1
 │  ├─ install.ps1
-│  └─ package.ps1
+│  ├─ package.ps1
+│  ├─ build.bat                              # 提取工坊上传集合 → build\（Windows）
+│  └─ build.sh                               # 同上（Linux / macOS / Git Bash）
+├─ build/                                    # build 脚本产物，不入库
+│  └─ empire_validity_bypass/                #   ← 创意工坊的 contentfolder
 ├─ CHANGELOG.md
 ├─ LICENSE
 ├─ README.md
@@ -90,21 +94,44 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 
 上传步骤：
 
+0. 先跑构建脚本，把「只该上传的东西」提取到 `build/empire_validity_bypass/`：
+
+   ```powershell
+   .\tools\build.bat          # Windows（cmd，不依赖 PowerShell）
+   ```
+
+   ```bash
+   bash tools/build.sh        # Linux / macOS / Git Bash（chmod +x 后也可直接 ./tools/build.sh）
+   ```
+
+   两个脚本规则一致：先清空 `build/empire_validity_bypass/` 再重建，只放
+   `descriptor.mod`、`thumbnail.png`、`README.txt` 和游戏内容目录；`.git/`、`tools/`、
+   `dist/`、根目录 `empire_validity_bypass.mod`、`Thumbs.db` / `*.swp` / `*.log` /
+   `*.psd` 之类一律不进去。构建完会打印文件清单、大小，并做校验（缺文件、
+   `descriptor.mod` 里混进 `path=`、有被排除的文件残留都会直接报错退出）。
+
+   常用参数：`-h` 看帮助，`-n` 只演练（产物写临时目录、不碰 `build/`），
+   `-o DIR` 换输出根目录。`-o` 指向源码目录或仓库根的上级会被拒绝——脚本要清空
+   目标目录，护栏是必须的。
+
 1. 完全退出游戏（启动器保持运行）。
 2. 启动器 → `Mods` → 选中本地安装的 **虚境锻造：游牧兼容** → `Upload Mod`。
 3. 登录 Paradox 账号（需与 Steam 关联），填标题、简介、版本、tags，上传。
 4. 上传完成会得到 `PublishedFileId`：把它填到本 README 顶部那行链接里，并写进 CHANGELOG。
 
+上传时把 `build/empire_validity_bypass/` 当作内容目录（steamcmd 的 `contentfolder`）；
+用启动器上传的话，确认本地安装的那份与 `build/` 内容一致即可。
+
 上传之后：
 
 - 启动器会给本地 `.mod` 补上 `remote_file_id="<PublishedFileId>"`，文件内容变化是正常的。
 - 工坊目录里是 `empire_validity_bypass/` 的完整副本（含 `descriptor.mod`、`thumbnail.png`）。
-- 更新流程：改版本号（两处）→ 再执行一次 `Upload Mod`，Steam 自动推送。
+- 更新流程：改版本号（两处）→ 重跑 `build` 脚本 → 再执行一次 `Upload Mod`，Steam 自动推送。
 - 建议先设成「不公开 / Unlisted」自测一轮（订阅、开局、多人），确认没问题再改成公开。
 
 不要上传的东西：`.git/`、`tools/`、`dist/`、`CHANGELOG.md`。
 我们的结构把这些留在仓库根，mod 文件夹里只有游戏内容。有些工坊 mod 的目录里甚至带着
-`.git/`，那是直接把仓库文件夹传上去的结果。
+`.git/`，那是直接把仓库文件夹传上去的结果——`build` 脚本就是为了避免这种事。
 
 ## 工具脚本
 
@@ -112,6 +139,8 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 | --- | --- |
 | `tools/install.ps1` | 本地安装：复制到用户数据目录、旧副本改名备份、`-Enable` 写 `dlc_load.json`、`-GameDataPath` 指定非默认目录 |
 | `tools/package.ps1` | 打包 `dist/empire_validity_bypass-v<版本>.zip`（非工坊分发用），校验包内清单并输出 SHA256 |
+| `tools/build.bat` | 提取创意工坊上传集合到 `build\empire_validity_bypass\`：清空重建、剔除无关文件、校验后打印清单（cmd，不依赖 PowerShell） |
+| `tools/build.sh` | 同上，Linux / macOS / Git Bash 用；规则与 `build.bat` 一致，产物逐字节相同 |
 | `tools/common.ps1` | 路径探测（Steam 库 / Paradox 用户数据目录）等公共函数 |
 
 `package.ps1` 出的 zip 是给「不想用 Steam 订阅」或自测的人用的：结构是 `mod/<id>.mod` +
@@ -129,6 +158,9 @@ stellaris/                                   # 等价于游戏目录下的 Stell
 - Paradox 脚本：UTF-8 无 BOM、LF、Tab 缩进，与原版一致。
 - `tools/*.ps1`：UTF-8 **带 BOM**（Windows PowerShell 5.1 读无 BOM 文件会把中文当 ANSI，
   导致解析报错）。编辑后确认前三个字节是 `EF BB BF`。
+- `tools/*.sh`：UTF-8 **无 BOM + LF**（CRLF 会让 bash 报 `$'\r': command not found`）。
+- `tools/*.bat`：UTF-8 **无 BOM + CRLF**（cmd 会把 BOM 当命令名；LF 会拆错行，
+  而且脚本里靠 `chcp 65001` 显示中文，所以首行必须是纯 ASCII 的 `@echo off`）。
 - Paradox 脚本在 `.gitattributes` 里标记为 `-text`，git 不做换行转换；`*.png` 标记为 `binary`。
 - 版本号写在 `empire_validity_bypass.mod` 与 `empire_validity_bypass/descriptor.mod` 两处，
   必须同步；`package.ps1` 从 `descriptor.mod` 读取版本号。
